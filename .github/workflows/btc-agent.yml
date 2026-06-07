@@ -1,6 +1,8 @@
 name: BTC Discipline Agent
 
 on:
+  push:
+    branches:
   schedule:
     # GitHub cron memakai UTC.
     # Ini jalan setiap 30 menit.
