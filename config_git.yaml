@@ -1,0 +1,30 @@
+symbol: BTCUSDT
+
+portfolio:
+  usdt: 270.35
+  btc: 0.00067
+  target_btc_min_pct: 25
+  target_btc_max_pct: 40
+  max_single_buy_usdt: 40
+  emergency_usdt_reserve: 150
+
+mental:
+  state: calm
+  max_alerts_per_day: 6
+
+risk:
+  pump_24h_pct: 4
+  dump_24h_pct: -5
+  dip_from_7d_high_pct: -8
+  deep_dip_from_7d_high_pct: -15
+  near_7d_low_pct: 2
+  confirmation_above_ma_pct: 1.5
+
+strategy:
+  allow_confirmation_buy: true
+  allow_dip_buy: true
+  no_trade_when_panic: true
+
+github_repo_health:
+  remind_after_days: 55
+  critical_after_days: 57
