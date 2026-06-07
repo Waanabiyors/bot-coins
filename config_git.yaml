@@ -20,6 +20,15 @@ risk:
   near_7d_low_pct: 2
   confirmation_above_ma_pct: 1.5
 
+alert_policy:
+  send_every_run: true
+  send_on_signal_change: true
+  send_on_action: true
+  heartbeat_hours:
+    - 0
+    - 12
+  significant_price_change_pct: 3
+
 strategy:
   allow_confirmation_buy: true
   allow_dip_buy: true
