@@ -66,35 +66,10 @@ def build_tokocrypto_exchange(private=False):
     
 def get_24h_ticker(symbol):
     """
-    Primary: Tokocrypto public ticker via CCXT.
-    Fallback: CoinGecko.
+    Price source: CoinGecko.
+    We do NOT use ccxt.tokocrypto.fetch_ticker because it routes to api.binance.com
+    and may timeout from WSL/GitHub Actions.
     """
-    try:
-        exchange = build_tokocrypto_exchange(private=False)
-        ticker = exchange.fetch_ticker("BTC/USDT")
-
-        last = ticker.get("last")
-        high = ticker.get("high") or last
-        low = ticker.get("low") or last
-        percentage = ticker.get("percentage") or 0
-        volume = ticker.get("baseVolume") or 0
-
-        if last is None:
-            raise RuntimeError(f"Tokocrypto ticker missing last price: {ticker}")
-
-        return {
-            "price": float(last),
-            "change_pct_24h": float(percentage),
-            "high_24h": float(high),
-            "low_24h": float(low),
-            "volume": float(volume),
-            "source": "Tokocrypto",
-        }
-
-    except Exception as tc_error:
-        print(f"[WARN] Tokocrypto ticker failed: {tc_error}")
-
-    # Fallback CoinGecko
     url = (
         "https://api.coingecko.com/api/v3/simple/price"
         "?ids=bitcoin"
@@ -119,32 +94,9 @@ def get_24h_ticker(symbol):
 
 def get_daily_klines(symbol, days=30):
     """
-    Primary: Tokocrypto OHLCV via CCXT.
-    Fallback: CoinGecko market_chart.
+    Daily price source: CoinGecko.
+    This avoids ccxt.tokocrypto OHLCV/ticker routing issues.
     """
-    try:
-        exchange = build_tokocrypto_exchange(private=False)
-        raw = exchange.fetch_ohlcv("BTC/USDT", timeframe="1d", limit=days)
-
-        rows = []
-        for item in raw:
-            rows.append({
-                "time": pd.to_datetime(item[0], unit="ms"),
-                "open": float(item[1]),
-                "high": float(item[2]),
-                "low": float(item[3]),
-                "close": float(item[4]),
-                "volume": float(item[5]),
-            })
-
-        if not rows:
-            raise RuntimeError("Tokocrypto OHLCV returned empty data.")
-
-        return pd.DataFrame(rows)
-
-    except Exception as tc_error:
-        print(f"[WARN] Tokocrypto OHLCV failed: {tc_error}")
-
     url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart"
     params = {
         "vs_currency": "usd",
@@ -569,6 +521,20 @@ def build_repo_reminder(config):
 
     return ""
 
+def format_open_orders(open_orders):
+    if not open_orders:
+        return "Open orders: 0"
+
+    lines = [f"Open orders: {len(open_orders)}"]
+    for order in open_orders[:5]:
+        side = order.get("side")
+        order_type = order.get("type")
+        price = order.get("price")
+        amount = order.get("amount")
+        status = order.get("status")
+        lines.append(f"- {side} {order_type} @ {price} | amount {amount} | {status}")
+
+    return "\n".join(lines)
 
 def build_message(config, market, portfolio, decision,
                   open_orders=None, ai_explanation=""):
@@ -594,7 +560,7 @@ def build_message(config, market, portfolio, decision,
         f"Reason: {decision['reason']}\n\n"
         f"Mental rule: jangan FOMO, jangan revenge trade."
         f"{repo_reminder}"
-                f"\n\nOpen orders: {len(open_orders or [])}"
+        f"\n\nOpen orders: {len(open_orders or [])}"
         f"{repo_reminder}"
         f"\n\n{ai_explanation if ai_explanation else ''}"
     )

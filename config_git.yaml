@@ -30,7 +30,7 @@ github_repo_health:
   critical_after_days: 57
 
 data_sources:
-  use_tokocrypto_public_price: true
+  use_tokocrypto_public_price: false
   use_tokocrypto_private_balance: true
   use_tokocrypto_open_orders: true
   fallback_to_coingecko: true
