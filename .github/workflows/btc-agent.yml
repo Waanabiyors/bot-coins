@@ -1,0 +1,49 @@
+name: BTC Discipline Agent
+
+on:
+  schedule:
+    # GitHub cron memakai UTC.
+    # Ini jalan setiap 30 menit.
+    - cron: "7,37 * * * *"
+  workflow_dispatch:
+
+jobs:
+  run-btc-agent:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Test Binance connectivity
+        continue-on-error: true
+        run: |
+          echo "Testing Binance API..."
+          curl -m 12 -sS "https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT" | head -c 500
+          echo ""
+
+      - name: Test CoinGecko connectivity
+        run: |
+          echo "Testing CoinGecko API..."
+          curl -m 12 -sS "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true"
+          echo ""
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run BTC Discipline Agent
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python main_once.py
