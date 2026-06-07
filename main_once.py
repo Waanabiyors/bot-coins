@@ -232,12 +232,9 @@ def fetch_tokocrypto_portfolio():
 
 
 def fetch_tokocrypto_open_orders():
-    """
-    Read-only open order fetch.
-    Tidak cancel order.
-    Tidak place order.
-    """
     try:
+        print("DEBUG: trying Tokocrypto open orders...", flush=True)
+
         exchange = build_tokocrypto_exchange(private=True)
         orders = exchange.fetch_open_orders("BTC/USDT")
 
@@ -251,11 +248,13 @@ def fetch_tokocrypto_open_orders():
                 "status": order.get("status"),
             })
 
-        return simplified
+        print(f"DEBUG: Tokocrypto open orders success: {len(simplified)} orders", flush=True)
+        return simplified, ""
 
     except Exception as error:
-        print(f"[WARN] Tokocrypto open orders failed: {error}")
-        return []
+        error_message = str(error)
+        print(f"[WARN] Tokocrypto open orders failed: {error_message}", flush=True)
+        return [], error_message
 
 
 # ============================================================
@@ -320,8 +319,14 @@ def calculate_portfolio(config, price):
     data_sources = config.get("data_sources", {})
     use_private_balance = data_sources.get("use_tokocrypto_private_balance", False)
 
+    portfolio_error = ""
+
     if use_private_balance:
         try:
+            print("DEBUG: trying Tokocrypto private balance...", flush=True)
+            print(f"DEBUG: TOKOCRYPTO_API_KEY exists: {bool(os.getenv('TOKOCRYPTO_API_KEY'))}", flush=True)
+            print(f"DEBUG: TOKOCRYPTO_API_SECRET exists: {bool(os.getenv('TOKOCRYPTO_API_SECRET'))}", flush=True)
+
             remote = fetch_tokocrypto_portfolio()
 
             btc = float(remote["btc_total"])
@@ -333,9 +338,11 @@ def calculate_portfolio(config, price):
             usdt_used = float(remote["usdt_used"])
 
             portfolio_source = remote["source"]
+            print("DEBUG: Tokocrypto private balance success", flush=True)
 
         except Exception as error:
-            print(f"[WARN] Tokocrypto balance failed, fallback to config: {error}")
+            portfolio_error = str(error)
+            print(f"[WARN] Tokocrypto balance failed, fallback to config: {portfolio_error}", flush=True)
 
             usdt = float(config["portfolio"]["usdt"])
             btc = float(config["portfolio"]["btc"])
@@ -356,6 +363,7 @@ def calculate_portfolio(config, price):
         usdt_used = 0
 
         portfolio_source = "config_git.yaml"
+        portfolio_error = "Tokocrypto private balance disabled in config_git.yaml"
 
     btc_value = btc * price
     total_value = usdt + btc_value
@@ -374,6 +382,7 @@ def calculate_portfolio(config, price):
         "btc_pct": btc_pct,
         "usdt_pct": usdt_pct,
         "source": portfolio_source,
+        "error": portfolio_error,
     }
 
 
@@ -702,7 +711,8 @@ def format_open_orders(open_orders):
     return "\n".join(lines)
 
 
-def build_message(config, market, portfolio, decision, open_orders=None, ai_explanation=""):
+def build_message(config, market, portfolio, decision,
+                  open_orders=None, ai_explanation="", open_orders_error=""):
     repo_reminder = build_repo_reminder(config)
     open_orders_text = format_open_orders(open_orders or [])
 
@@ -719,13 +729,15 @@ def build_message(config, market, portfolio, decision, open_orders=None, ai_expl
         f"MA7: ${market['ma_7']:,.0f} | MA20: ${market['ma_20']:,.0f}\n\n"
         f"Portfolio:\n"
         f"Source: {portfolio.get('source', 'unknown')}\n"
+        f"{'Portfolio error: ' + portfolio.get('error', '') + chr(10) if portfolio.get('error') else ''}"
         f"BTC: {portfolio['btc_pct']:.1f}% | USDT: {portfolio['usdt_pct']:.1f}%\n"
         f"BTC total: {portfolio['btc']:.8f}\n"
         f"USDT free: {portfolio['usdt_free']:.2f}\n"
         f"USDT used/open orders: {portfolio['usdt_used']:.2f}\n"
         f"USDT total: {portfolio['usdt']:.2f}\n"
         f"Total value: {portfolio['total_value']:.2f} USDT\n\n"
-        f"{open_orders_text}\n\n"
+        f"{open_orders_text}\n"
+        f"{'Open orders error: ' + open_orders_error + chr(10) if open_orders_error else ''}\n"
         f"Signal: {decision['signal']}\n"
         f"Recommended action: {decision['action_usdt']:.2f} USDT\n"
         f"Reason: {decision['reason']}\n\n"
@@ -753,8 +765,10 @@ def main():
     decision = decide_signal(config, market, portfolio)
 
     open_orders = []
+    open_orders_error = ""
+
     if config.get("data_sources", {}).get("use_tokocrypto_open_orders", False):
-        open_orders = fetch_tokocrypto_open_orders()
+        open_orders, open_orders_error = fetch_tokocrypto_open_orders()
 
     ai_explanation = generate_gemini_explanation(
         config=config,
@@ -771,6 +785,7 @@ def main():
         decision=decision,
         open_orders=open_orders,
         ai_explanation=ai_explanation,
+        open_orders_error=open_orders_error,
     )
 
     send_telegram(message)
