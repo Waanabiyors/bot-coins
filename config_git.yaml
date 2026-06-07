@@ -28,3 +28,22 @@ strategy:
 github_repo_health:
   remind_after_days: 55
   critical_after_days: 57
+
+data_sources:
+  use_tokocrypto_public_price: true
+  use_tokocrypto_private_balance: true
+  use_tokocrypto_open_orders: true
+  fallback_to_coingecko: true
+
+safety:
+  allow_trading: false
+  allow_withdrawal: false
+  allow_order_cancel: false
+
+llm:
+  enabled: true
+  provider: gemini
+  model: gemini-2.5-flash-lite
+  max_output_tokens: 300
+  temperature: 0.2
+  fallback_to_rule_message: true
