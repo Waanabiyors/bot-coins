@@ -638,7 +638,7 @@ def generate_gemini_explanation(config, market, portfolio, decision, open_orders
     max_output_tokens = int(llm_cfg.get("max_output_tokens", 300))
     temperature = float(llm_cfg.get("temperature", 0.2))
 
-    context = build_rule_summary_for_llm(market, portfolio, decision, open_orders)
+    context = build_rule_summary_for_llm(config, market, portfolio, decision, open_orders)
 
     prompt = f"""
 You are a crypto decision-support explainer.
