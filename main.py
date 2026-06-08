@@ -753,8 +753,8 @@ def choose_gemini_model(config, market, portfolio, decision):
     """
     Model routing:
     - Grounding aktif -> pakai grounding_model, default gemini-2.5-flash.
-    - Deep review aktif -> pakai deep_model, default gemini-2.5-pro.
-    - Normal -> pakai default_model, default gemini-2.5-flash.
+    - Deep review aktif -> pakai deep_model, default gemini-3.5-flash.
+    - Normal -> pakai default_model, default gemini-3.5-flash.
     """
     llm_cfg = config.get("llm", {})
 
@@ -772,15 +772,15 @@ def choose_gemini_model(config, market, portfolio, decision):
 
     if use_deep:
         return {
-            "model": llm_cfg.get("deep_model", "gemini-2.5-pro"),
-            "max_output_tokens": int(llm_cfg.get("deep_max_output_tokens", 1000)),
+            "model": llm_cfg.get("deep_model", "gemini-3.5-flash"),
+            "max_output_tokens": int(llm_cfg.get("deep_max_output_tokens", 850)),
             "use_grounding": False,
             "routing_reason": deep_reason,
         }
 
     return {
-        "model": llm_cfg.get("default_model", "gemini-2.5-flash"),
-        "max_output_tokens": int(llm_cfg.get("max_output_tokens", 500)),
+        "model": llm_cfg.get("default_model", "gemini-3.5-flash"),
+        "max_output_tokens": int(llm_cfg.get("max_output_tokens", 850)),
         "use_grounding": False,
         "routing_reason": "default normal review",
     }
@@ -994,8 +994,8 @@ Total response under 160 words.
         if not response.ok:
             print(f"[WARN] Gemini error with {model}: {response.status_code} {response.text}")
 
-            fallback_model = llm_cfg.get("fallback_model", "gemini-2.5-flash-lite")
-            fallback_tokens = int(llm_cfg.get("fallback_max_output_tokens", 300))
+            fallback_model = llm_cfg.get("fallback_model", "gemini-2.5-flash")
+            fallback_tokens = int(llm_cfg.get("fallback_max_output_tokens", 850))
 
             fallback_url = (
                 f"https://generativelanguage.googleapis.com/v1beta/models/"
