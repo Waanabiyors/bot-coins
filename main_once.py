@@ -597,7 +597,7 @@ def build_repo_reminder(config):
 # Gemini explanation
 # ============================================================
 
-def build_rule_summary_for_llm(market, portfolio, decision, open_orders):
+def build_rule_summary_for_llm(config, market, portfolio, decision, open_orders):
     return {
         "market": {
             "price": market["price"],
