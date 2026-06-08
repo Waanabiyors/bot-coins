@@ -80,6 +80,24 @@ def send_telegram(message):
 
     if not response.ok:
         raise RuntimeError(f"Telegram error: {response.text}")
+    if not response.ok:
+       print("[WARN] Telegram HTML parse failed. Retrying as plain text.")
+
+       plain_message = re.sub(r"</?[^>]+>", "", message)
+       
+       plain_payload = {
+           "chat_id": chat_id,
+           "text": plain_message,
+           "disable_web_page_preview": True,
+       }
+       
+       plain_response = requests.post(url, json=plain_payload, timeout=25)
+
+       print(f"Telegram plain status code: {plain_response.status_code}")
+       print(f"Telegram plain response: {plain_response.text}")
+       
+       if not plain_response.ok:
+           raise RuntimeError(f"Telegram error: {plain_response.text}")
 
 
 # ============================================================
@@ -1370,6 +1388,15 @@ def clean_ai_explanation(text):
     # Restore allowed tags
     for key, raw in protected.items():
         text = text.replace(key, raw)
+
+    # Balance simple Telegram HTML tags to prevent Telegram parse errors.
+    # Gemini sometimes outputs <b> without </b>.
+    for tag in ["b", "i", "u", "s", "code", "pre"]:
+        open_count = len(re.findall(fr"<{tag}>", text))
+        close_count = len(re.findall(fr"</{tag}>", text))
+
+        if open_count > close_count:
+            text += "".join(f"</{tag}>" for _ in range(open_count - close_count))
 
     return text.strip()
 
