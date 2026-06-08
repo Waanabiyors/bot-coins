@@ -2,3 +2,4 @@ requests
 pyyaml
 pandas
 ccxt
+dotenv
