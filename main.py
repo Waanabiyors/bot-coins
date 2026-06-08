@@ -781,7 +781,7 @@ def choose_gemini_model(config, market, portfolio, decision):
     if use_grounding:
         return {
             "model": llm_cfg.get("grounding_model", "gemini-2.5-flash"),
-            "max_output_tokens": int(llm_cfg.get("grounding_max_output_tokens", 1000)),
+            "max_output_tokens": int(llm_cfg.get("grounding_max_output_tokens", 2000)),
             "use_grounding": True,
             "routing_reason": grounding_reason,
         }
@@ -791,14 +791,14 @@ def choose_gemini_model(config, market, portfolio, decision):
     if use_deep:
         return {
             "model": llm_cfg.get("deep_model", "gemini-3.5-flash"),
-            "max_output_tokens": int(llm_cfg.get("deep_max_output_tokens", 850)),
+            "max_output_tokens": int(llm_cfg.get("deep_max_output_tokens", 2000)),
             "use_grounding": False,
             "routing_reason": deep_reason,
         }
 
     return {
         "model": llm_cfg.get("default_model", "gemini-3.5-flash"),
-        "max_output_tokens": int(llm_cfg.get("max_output_tokens", 850)),
+        "max_output_tokens": int(llm_cfg.get("max_output_tokens", 2000)),
         "use_grounding": False,
         "routing_reason": "default normal review",
     }
@@ -995,8 +995,11 @@ agree | cautious_agree | disagree_but_do_not_override
 <b>Mental Note</b>
 ...
 
+End Review
+
 Keep each section concise.
 Total response under 250 words.
+Do not stop before End Review.
 """
 
     url = (
@@ -1033,7 +1036,7 @@ Total response under 250 words.
             print(f"[WARN] Gemini error with {model}: {response.status_code} {response.text}")
 
             fallback_model = llm_cfg.get("fallback_model", "gemini-2.5-flash")
-            fallback_tokens = int(llm_cfg.get("fallback_max_output_tokens", 850))
+            fallback_tokens = int(llm_cfg.get("fallback_max_output_tokens", 2000))
 
             fallback_url = (
                 f"https://generativelanguage.googleapis.com/v1beta/models/"
@@ -1094,7 +1097,13 @@ Total response under 250 words.
                 return ai_error_fallback
 
             raw_text = parts[0].get("text", "").strip()
+
+            if "END_REVIEW" not in raw_text:
+                print(f"[WARN] Gemini HTML output incomplete: {raw_text[:500]}")
+                return ai_error_fallback
+            raw_text = raw_text.replace("END_REVIEW", "").strip()
             return clean_ai_explanation(raw_text)
+
 
         data = response.json()
 
@@ -1110,6 +1119,10 @@ Total response under 250 words.
             return ai_error_fallback
 
         raw_text = parts[0].get("text", "").strip()
+        if "END_REVIEW" not in raw_text:
+            print(f"[WARN] Gemini HTML output incomplete: {raw_text[:500]}")
+            return ai_error_fallback
+        raw_text = raw_text.replace("END_REVIEW", "").strip()
         return clean_ai_explanation(raw_text)
                 
     except Exception as error:

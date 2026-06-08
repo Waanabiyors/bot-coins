@@ -83,10 +83,10 @@ llm:
   fallback_model: gemini-3.5-flash
   grounding_model: gemini-2.5-flash
 
-  max_output_tokens: 850
-  deep_max_output_tokens: 850
-  fallback_max_output_tokens: 850
-  grounding_max_output_tokens: 1000
+  max_output_tokens: 2000
+  deep_max_output_tokens: 2000
+  fallback_max_output_tokens: 2000
+  grounding_max_output_tokens: 2000
 
   temperature: 0.2
   fallback_to_rule_message: true
