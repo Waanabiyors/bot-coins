@@ -39,7 +39,7 @@ github_repo_health:
   critical_after_days: 57
 
 data_sources:
-  use_tokocrypto_public_price: true
+  use_tokocrypto_public_price: false
   use_tokocrypto_private_balance: true
   use_tokocrypto_open_orders: true
   fallback_to_coingecko: true
@@ -56,3 +56,8 @@ llm:
   max_output_tokens: 300
   temperature: 0.2
   fallback_to_rule_message: true
+
+recovery:
+  initial_capital_usdt: 363.71
+  target_months: 3
+  target_mode: break_even_first

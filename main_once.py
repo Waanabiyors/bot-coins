@@ -5,10 +5,13 @@ import ccxt
 import pandas as pd
 import requests
 import yaml
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
-CONFIG_FILE = "config_git.yaml"
-
+#CONFIG_FILE = "config_git.yaml"
+CONFIG_FILE = os.getenv("BTC_AGENT_CONFIG", "config_git.yaml")
 
 # ============================================================
 # Safety guard
@@ -635,6 +638,10 @@ Do not override the signal.
 Do not tell the user to all-in.
 Do not suggest leverage, futures, margin, or high-risk behavior.
 
+You must include what would invalidate the current signal.
+You must mention whether the current BTC allocation is too low, balanced, or too high for the user's recovery goal.
+You must prioritize mental stability over aggressive recovery.
+
 Explain the following BTC/USDT decision in Indonesian, concise but clear.
 Focus on risk, position sizing, and mental discipline.
 
@@ -645,7 +652,9 @@ Output format:
 AI Explanation:
 - Market:
 - Portfolio:
+- Recovery:
 - Action:
+- Invalidation:
 - Mental note:
 """
 
@@ -690,7 +699,82 @@ AI Explanation:
         print(f"[WARN] Gemini failed: {error}")
         return ""
 
+# ============================================================
+# Recovery and scenario analysis
+# ============================================================
 
+def calculate_recovery_status(config, portfolio):
+    recovery_cfg = config.get("recovery", {})
+    initial_capital = float(recovery_cfg.get("initial_capital_usdt", 0))
+
+    if initial_capital <= 0:
+        return {
+            "enabled": False,
+            "message": "Recovery tracker disabled: initial_capital_usdt not set.",
+        }
+
+    current_value = float(portfolio["total_value"])
+    gap = initial_capital - current_value
+    gap_pct = (gap / current_value) * 100 if current_value > 0 else 0
+    recovered_pct = (current_value / initial_capital) * 100 if initial_capital > 0 else 0
+
+    if gap <= 0:
+        status = "RECOVERED"
+        message = (
+            f"Recovery status: RECOVERED\n"
+            f"Initial capital: {initial_capital:.2f} USDT\n"
+            f"Current value: {current_value:.2f} USDT\n"
+            f"Surplus: {abs(gap):.2f} USDT"
+        )
+    else:
+        status = "NOT_RECOVERED"
+        message = (
+            f"Recovery status: NOT RECOVERED\n"
+            f"Initial capital: {initial_capital:.2f} USDT\n"
+            f"Current value: {current_value:.2f} USDT\n"
+            f"Gap to break-even: {gap:.2f} USDT ({gap_pct:.1f}% from current portfolio)\n"
+            f"Recovered: {recovered_pct:.1f}%"
+        )
+
+    return {
+        "enabled": True,
+        "status": status,
+        "initial_capital": initial_capital,
+        "current_value": current_value,
+        "gap": gap,
+        "gap_pct": gap_pct,
+        "recovered_pct": recovered_pct,
+        "message": message,
+    }
+
+
+def calculate_price_scenarios(portfolio, price_levels):
+    btc = float(portfolio["btc"])
+    usdt = float(portfolio["usdt"])
+
+    scenarios = []
+    for price in price_levels:
+        value = usdt + (btc * price)
+        scenarios.append({
+            "price": price,
+            "portfolio_value": value,
+        })
+
+    return scenarios
+
+
+def build_scenario_text(portfolio):
+    price_levels = [50000, 55000, 60000, 65000, 70000, 75000]
+    scenarios = calculate_price_scenarios(portfolio, price_levels)
+
+    lines = ["Scenario if no new transaction:"]
+    for item in scenarios:
+        lines.append(
+            f"- BTC ${item['price']:,.0f}: portfolio ≈ {item['portfolio_value']:.2f} USDT"
+        )
+
+    return "\n".join(lines)
+    
 # ============================================================
 # Message formatting
 # ============================================================
@@ -715,6 +799,9 @@ def build_message(config, market, portfolio, decision,
                   open_orders=None, ai_explanation="", open_orders_error=""):
     repo_reminder = build_repo_reminder(config)
     open_orders_text = format_open_orders(open_orders or [])
+    recovery = calculate_recovery_status(config, portfolio)
+    recovery_text = recovery.get("message", "")
+    scenario_text = build_scenario_text(portfolio)
 
     return (
         f"BTC Discipline Agent\n\n"
@@ -736,8 +823,11 @@ def build_message(config, market, portfolio, decision,
         f"USDT used/open orders: {portfolio['usdt_used']:.2f}\n"
         f"USDT total: {portfolio['usdt']:.2f}\n"
         f"Total value: {portfolio['total_value']:.2f} USDT\n\n"
+        f"{recovery_text}\n\n"
+        f"{scenario_text}\n\n"
         f"{open_orders_text}\n"
         f"{'Open orders error: ' + open_orders_error + chr(10) if open_orders_error else ''}\n"
+        
         f"Signal: {decision['signal']}\n"
         f"Recommended action: {decision['action_usdt']:.2f} USDT\n"
         f"Reason: {decision['reason']}\n\n"
@@ -746,6 +836,39 @@ def build_message(config, market, portfolio, decision,
         f"\n\n{ai_explanation if ai_explanation else ''}"
     )
 
+# ============================================================
+# Journal logging
+# ============================================================
+
+def append_signal_log(market, portfolio, decision):
+    os.makedirs("data", exist_ok=True)
+
+    log_file = "data/signal_log.csv"
+    timestamp = datetime.now(timezone.utc).isoformat()
+
+    row = {
+        "timestamp": timestamp,
+        "price": market["price"],
+        "source": market.get("source", "unknown"),
+        "regime": market["regime"],
+        "change_24h": market["change_24h"],
+        "change_7d": market["change_7d"],
+        "change_30d": market["change_30d"],
+        "btc_pct": portfolio["btc_pct"],
+        "usdt_pct": portfolio["usdt_pct"],
+        "btc_total": portfolio["btc"],
+        "usdt_total": portfolio["usdt"],
+        "usdt_free": portfolio["usdt_free"],
+        "usdt_used": portfolio["usdt_used"],
+        "total_value": portfolio["total_value"],
+        "signal": decision["signal"],
+        "action_usdt": decision["action_usdt"],
+        "reason": decision["reason"],
+    }
+
+    df = pd.DataFrame([row])
+    header = not os.path.exists(log_file)
+    df.to_csv(log_file, mode="a", header=header, index=False)
 
 # ============================================================
 # Main
@@ -763,6 +886,7 @@ def main():
     market = calculate_market_context(ticker, daily)
     portfolio = calculate_portfolio(config, market["price"])
     decision = decide_signal(config, market, portfolio)
+    append_signal_log(market, portfolio, decision)
 
     open_orders = []
     open_orders_error = ""

@@ -56,3 +56,8 @@ llm:
   max_output_tokens: 300
   temperature: 0.2
   fallback_to_rule_message: true
+
+recovery:
+  initial_capital_usdt: 363.71
+  target_months: 3
+  target_mode: break_even_first
