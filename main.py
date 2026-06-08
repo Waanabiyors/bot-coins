@@ -817,9 +817,32 @@ def generate_gemini_explanation(config, market, portfolio, decision, open_orders
     if not llm_cfg.get("enabled", False):
         return ""
 
+    ai_error_fallback = (
+        f"<b>AI Analyst Review</b>\n\n"
+        f"<b>Rule Agreement</b>\n"
+        f"unavailable\n\n"
+        f"<b>Confidence</b>\n"
+        f"<b>0/100</b>\n\n"
+        f"<b>Market Thesis</b>\n"
+        f"Gemini analyst output is unavailable for this run.\n\n"
+        f"<b>Portfolio Diagnosis</b>\n"
+        f"Use the deterministic portfolio and rule-engine sections above as the source of truth.\n\n"
+        f"<b>Recovery Assessment</b>\n"
+        f"Recovery analysis remains based on the rule-engine recovery tracker.\n\n"
+        f"<b>Risk Assessment</b>\n"
+        f"Do not act on missing or malformed Gemini output.\n\n"
+        f"<b>Suggested Manual Plan</b>\n"
+        f"Follow the rule-engine signal shown above.\n\n"
+        f"<b>Invalidation</b>\n"
+        f"Check the terminal or GitHub Actions log, then re-run the agent.\n\n"
+        f"<b>Mental Note</b>\n"
+        f"Missing AI output is not a trading signal."
+    )
+
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
-        return ""
+        print("[WARN] GEMINI_API_KEY is missing")
+        return ai_error_fallback
 
     routing = choose_gemini_model(config, market, portfolio, decision)
 
@@ -1021,16 +1044,16 @@ Total response under 160 words.
 
             if not fallback_response.ok:
                 print(f"[WARN] Gemini fallback error: {fallback_response.status_code} {fallback_response.text}")
-                return ""
+                return ai_error_fallback
 
             data = fallback_response.json()
             candidates = data.get("candidates", [])
             if not candidates:
-                return ""
+                return ai_error_fallback
 
             parts = candidates[0].get("content", {}).get("parts", [])
             if not parts:
-                return ""
+                return ai_error_fallback
 
             raw_text = parts[0].get("text", "").strip()
 
@@ -1068,11 +1091,11 @@ Total response under 160 words.
 
         candidates = data.get("candidates", [])
         if not candidates:
-            return ""
+            return ai_error_fallback
 
         parts = candidates[0].get("content", {}).get("parts", [])
         if not parts:
-            return ""
+            return ai_error_fallback
 
         raw_text = parts[0].get("text", "").strip()
         
@@ -1105,7 +1128,7 @@ Total response under 160 words.
 
     except Exception as error:
         print(f"[WARN] Gemini failed: {error}")
-        return ""
+        return ai_error_fallback
 
 '''
 def generate_gemini_explanation(config, market, portfolio, decision, open_orders):
