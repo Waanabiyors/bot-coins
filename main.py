@@ -934,7 +934,8 @@ Scenario:
 {scenario}
 
 Keep each JSON value concise.
-Total response under 250 words.
+Each JSON value must be under 28 words.
+Total response under 160 words.
 """
 
     url = (
@@ -1038,7 +1039,27 @@ Total response under 250 words.
                 return format_ai_review_from_json(ai_json)
             except Exception as parse_error:
                 print(f"[WARN] Gemini JSON parse failed: {parse_error}")
-                return clean_ai_explanation(raw_text)
+                return (
+                    f"<b>AI Analyst Review</b>\n\n"
+                    f"<b>Rule Agreement</b>\n"
+                    f"unavailable_parse_error\n\n"
+                    f"<b>Confidence</b>\n"
+                    f"<b>0/100</b>\n\n"
+                    f"<b>Market Thesis</b>\n"
+                    f"Gemini returned invalid or incomplete JSON, so the analyst layer could not be rendered.\n\n"
+                    f"<b>Portfolio Diagnosis</b>\n"
+                    f"Use the deterministic portfolio and rule-engine sections above as the source of truth.\n\n"
+                    f"<b>Recovery Assessment</b>\n"
+                    f"Recovery analysis remains based on the rule-engine recovery tracker.\n\n"
+                    f"<b>Risk Assessment</b>\n"
+                    f"Do not act on the raw Gemini response.\n\n"
+                    f"<b>Suggested Manual Plan</b>\n"
+                    f"Follow the rule-engine signal shown above.\n\n"
+                    f"<b>Invalidation</b>\n"
+                    f"Re-run the agent or wait for the next scheduled report.\n\n"
+                    f"<b>Mental Note</b>\n"
+                    f"Do not overreact to a formatting failure."
+                )
 
         data = response.json()
 
@@ -1060,7 +1081,27 @@ Total response under 250 words.
             return format_ai_review_from_json(ai_json)
         except Exception as parse_error:
             print(f"[WARN] Gemini JSON parse failed: {parse_error}")
-            return clean_ai_explanation(raw_text)
+            return (
+                f"<b>AI Analyst Review</b>\n\n"
+                f"<b>Rule Agreement</b>\n"
+                f"unavailable_parse_error\n\n"
+                f"<b>Confidence</b>\n"
+                f"<b>0/100</b>\n\n"
+                f"<b>Market Thesis</b>\n"
+                f"Gemini returned invalid or incomplete JSON, so the analyst layer could not be rendered.\n\n"
+                f"<b>Portfolio Diagnosis</b>\n"
+                f"Use the deterministic portfolio and rule-engine sections above as the source of truth.\n\n"
+                f"<b>Recovery Assessment</b>\n"
+                f"Recovery analysis remains based on the rule-engine recovery tracker.\n\n"
+                f"<b>Risk Assessment</b>\n"
+                f"Do not act on the raw Gemini response.\n\n"
+                f"<b>Suggested Manual Plan</b>\n"
+                f"Follow the rule-engine signal shown above.\n\n"
+                f"<b>Invalidation</b>\n"
+                f"Re-run the agent or wait for the next scheduled report.\n\n"
+                f"<b>Mental Note</b>\n"
+                f"Do not overreact to a formatting failure."
+            )
 
     except Exception as error:
         print(f"[WARN] Gemini failed: {error}")
@@ -1247,7 +1288,7 @@ def format_ai_review_from_json(ai_data):
         f"<b>Rule Agreement</b>\n"
         f"{esc(ai_data['agreement_with_rule'])}\n\n"
         f"<b>Confidence</b>\n"
-        f"<b>{esc(confidence_score)}/100\n\n"
+        f"<b>{esc(confidence_score)}/100</b>\n\n"
         #f"{esc(ai_data['confidence_score'])}/100\n\n"
         f"<b>Market Thesis</b>\n"
         f"{esc(ai_data['market_thesis'])}\n\n"
