@@ -928,37 +928,57 @@ Agreement rules:
 - If the portfolio is underallocated to BTC but open orders are active, usually use "cautious_agree".
 - If the rule signal is HOLD because open orders are active, do not recommend extra manual BTC buying.
 
-Return ONLY valid JSON.
+Return ONLY Telegram-compatible HTML.
 Do not use Markdown.
-Do not use HTML.
+Do not use JSON.
 Do not use code fences.
 Do not write any intro sentence.
+Start exactly with <b>AI Analyst Review</b>.
 
-JSON schema:
-{{
-  "agreement_with_rule": "agree | cautious_agree | disagree_but_do_not_override",
-  "confidence_score": 0,
-  "market_thesis": "Concise market thesis, not a raw data dump.",
-  "portfolio_diagnosis": "Portfolio allocation diagnosis relative to recovery target.",
-  "recovery_assessment": "Whether current allocation can realistically support recovery or needs controlled exposure later.",
-  "risk_assessment": "Main risk in the current setup.",
-  "suggested_manual_plan": "Manual-only plan that respects the rule-engine signal.",
-  "invalidation": "Specific conditions that would change the current signal.",
-  "mental_note": "Short psychological discipline note."
-}}
+Use exactly these sections:
+<b>AI Analyst Review</b>
+<b>Rule Agreement</b>
+<b>Confidence</b>
+<b>Market Thesis</b>
+<b>Portfolio Diagnosis</b>
+<b>Recovery Assessment</b>
+<b>Risk Assessment</b>
+<b>Suggested Manual Plan</b>
+<b>Invalidation</b>
+<b>Mental Note</b>
 
-Data:
-{context}
+Format:
+<b>AI Analyst Review</b>
 
-Recovery:
-{recovery}
+<b>Rule Agreement</b>
+agree | cautious_agree | disagree_but_do_not_override
 
-Scenario:
-{scenario}
+<b>Confidence</b>
+70/100
 
-Keep each JSON value concise.
-Each JSON value must be under 28 words.
-Total response under 160 words.
+<b>Market Thesis</b>
+...
+
+<b>Portfolio Diagnosis</b>
+...
+
+<b>Recovery Assessment</b>
+...
+
+<b>Risk Assessment</b>
+...
+
+<b>Suggested Manual Plan</b>
+...
+
+<b>Invalidation</b>
+...
+
+<b>Mental Note</b>
+...
+
+Keep each section concise.
+Total response under 250 words.
 """
 
     url = (
@@ -977,32 +997,7 @@ Total response under 160 words.
         "generationConfig": {
             "temperature": temperature,
             "maxOutputTokens": max_output_tokens,
-            "responseMimeType": "application/json",
-            "responseSchema": {
-                "type": "OBJECT",
-                "properties": {
-                    "agreement_with_rule": {"type": "STRING"},
-                    "confidence_score": {"type": "INTEGER"},
-                    "market_thesis": {"type": "STRING"},
-                    "portfolio_diagnosis": {"type": "STRING"},
-                    "recovery_assessment": {"type": "STRING"},
-                    "risk_assessment": {"type": "STRING"},
-                    "suggested_manual_plan": {"type": "STRING"},
-                    "invalidation": {"type": "STRING"},
-                    "mental_note": {"type": "STRING"},
-                },
-                "required": [
-                    "agreement_with_rule",
-                    "confidence_score",
-                    "market_thesis",
-                    "portfolio_diagnosis",
-                    "recovery_assessment",
-                    "risk_assessment",
-                    "suggested_manual_plan",
-                    "invalidation",
-                    "mental_note",
-                ]
-            },
+       
         },
     }
 
@@ -1063,34 +1058,8 @@ Total response under 160 words.
                     "temperature": temperature,
                     "maxOutputTokens": fallback_tokens,
                     "responseMimeType": "application/json",
-                    "responseSchema": {
-                        "type": "OBJECT",
-                        "properties": {
-                            "agreement_with_rule": {"type": "STRING"},
-                            "confidence_score": {"type": "INTEGER"},
-                            "market_thesis": {"type": "STRING"},
-                            "portfolio_diagnosis": {"type": "STRING"},
-                            "recovery_assessment": {"type": "STRING"},
-                            "risk_assessment": {"type": "STRING"},
-                            "suggested_manual_plan": {"type": "STRING"},
-                            "invalidation": {"type": "STRING"},
-                            "mental_note": {"type": "STRING"},
-                        },
-                        "required": [
-                            "agreement_with_rule",
-                            "confidence_score",
-                            "market_thesis",
-                            "portfolio_diagnosis",
-                            "recovery_assessment",
-                            "risk_assessment",
-                            "suggested_manual_plan",
-                            "invalidation",
-                            "mental_note",
-                        ],
-                    },
-                },
+                }
             }
-
             fallback_response = requests.post(fallback_url, json=fallback_payload, timeout=30)
 
             if not fallback_response.ok:
@@ -1107,33 +1076,7 @@ Total response under 160 words.
                 return ai_error_fallback
 
             raw_text = parts[0].get("text", "").strip()
-
-            try:
-                ai_json = extract_json_object(raw_text)
-                return format_ai_review_from_json(ai_json)
-            except Exception as parse_error:
-                print(f"[WARN] Gemini JSON parse failed: {parse_error}")
-                return (
-                    f"<b>AI Analyst Review</b>\n\n"
-                    f"<b>Rule Agreement</b>\n"
-                    f"unavailable_parse_error\n\n"
-                    f"<b>Confidence</b>\n"
-                    f"<b>0/100</b>\n\n"
-                    f"<b>Market Thesis</b>\n"
-                    f"Gemini returned invalid or incomplete JSON, so the analyst layer could not be rendered.\n\n"
-                    f"<b>Portfolio Diagnosis</b>\n"
-                    f"Use the deterministic portfolio and rule-engine sections above as the source of truth.\n\n"
-                    f"<b>Recovery Assessment</b>\n"
-                    f"Recovery analysis remains based on the rule-engine recovery tracker.\n\n"
-                    f"<b>Risk Assessment</b>\n"
-                    f"Do not act on the raw Gemini response.\n\n"
-                    f"<b>Suggested Manual Plan</b>\n"
-                    f"Follow the rule-engine signal shown above.\n\n"
-                    f"<b>Invalidation</b>\n"
-                    f"Re-run the agent or wait for the next scheduled report.\n\n"
-                    f"<b>Mental Note</b>\n"
-                    f"Do not overreact to a formatting failure."
-                )
+            return clean_ai_explanation(raw_text)
 
         data = response.json()
 
@@ -1149,34 +1092,8 @@ Total response under 160 words.
             return ai_error_fallback
 
         raw_text = parts[0].get("text", "").strip()
-        
-        try:
-            ai_json = extract_json_object(raw_text)
-            return format_ai_review_from_json(ai_json)
-        except Exception as parse_error:
-            print(f"[WARN] Gemini JSON parse failed: {parse_error}")
-            return (
-                f"<b>AI Analyst Review</b>\n\n"
-                f"<b>Rule Agreement</b>\n"
-                f"unavailable_parse_error\n\n"
-                f"<b>Confidence</b>\n"
-                f"<b>0/100</b>\n\n"
-                f"<b>Market Thesis</b>\n"
-                f"Gemini returned invalid or incomplete JSON, so the analyst layer could not be rendered.\n\n"
-                f"<b>Portfolio Diagnosis</b>\n"
-                f"Use the deterministic portfolio and rule-engine sections above as the source of truth.\n\n"
-                f"<b>Recovery Assessment</b>\n"
-                f"Recovery analysis remains based on the rule-engine recovery tracker.\n\n"
-                f"<b>Risk Assessment</b>\n"
-                f"Do not act on the raw Gemini response.\n\n"
-                f"<b>Suggested Manual Plan</b>\n"
-                f"Follow the rule-engine signal shown above.\n\n"
-                f"<b>Invalidation</b>\n"
-                f"Re-run the agent or wait for the next scheduled report.\n\n"
-                f"<b>Mental Note</b>\n"
-                f"Do not overreact to a formatting failure."
-            )
-
+        return clean_ai_explanation(raw_text)
+                
     except Exception as error:
         print(f"[WARN] Gemini failed: {error}")
         return ai_error_fallback
