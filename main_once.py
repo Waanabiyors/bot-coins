@@ -5,7 +5,9 @@ import ccxt
 import pandas as pd
 import requests
 import yaml
+import re
 from dotenv import load_dotenv
+
 
 load_dotenv()
 
@@ -615,6 +617,8 @@ def build_rule_summary_for_llm(market, portfolio, decision, open_orders):
             "usdt_free": portfolio["usdt_free"],
             "usdt_used": portfolio["usdt_used"],
             "source": portfolio.get("source"),
+            "target_btc_min_pct": config["portfolio"]["target_btc_min_pct"],
+            "target_btc_max_pct": config["portfolio"]["target_btc_max_pct"],
         },
         "decision": decision,
         "open_orders": open_orders[:5],
@@ -667,6 +671,10 @@ You must include what would invalidate the current signal.
 You must mention whether the current BTC allocation is too low, balanced, or too high for the user's recovery goal.
 You must prioritize mental stability over aggressive recovery.
 
+If btc_pct is below target_btc_min_pct, say the BTC allocation is BELOW TARGET for recovery mode, not balanced.
+If btc_pct is between target_btc_min_pct and target_btc_max_pct, say it is balanced.
+If btc_pct is above target_btc_max_pct, say it is too aggressive.
+
 Data:
 {context}
 
@@ -691,6 +699,10 @@ Output format exactly:
 
 <b>Mental note</b>
 ...
+
+Keep the explanation under 180 words.
+Do not repeat all numeric data already shown in the main report.
+Be concise.
 """
 
     url = (
@@ -733,6 +745,27 @@ Output format exactly:
     except Exception as error:
         print(f"[WARN] Gemini failed: {error}")
         return ""
+
+def clean_ai_explanation(text):
+    """
+    Membersihkan output Gemini agar rapi di Telegram HTML mode.
+    - Mengubah **bold** menjadi <b>bold</b>
+    - Menghapus bullet Markdown berlebihan
+    - Merapikan whitespace
+    """
+    if not text:
+        return ""
+
+    # Convert Markdown bold to Telegram HTML bold
+    text = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", text)
+
+    # Remove Markdown bullet style if Gemini outputs "*   "
+    text = re.sub(r"^\*\s+", "", text, flags=re.MULTILINE)
+
+    # Reduce excessive blank lines
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    return text.strip()
 
 # ============================================================
 # Recovery and scenario analysis
