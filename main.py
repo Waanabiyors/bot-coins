@@ -978,6 +978,31 @@ Total response under 160 words.
             "temperature": temperature,
             "maxOutputTokens": max_output_tokens,
             "responseMimeType": "application/json",
+            "responseSchema": {
+                "type": "OBJECT",
+                "properties": {
+                    "agreement_with_rule": {"type": "STRING"},
+                    "confidence_score": {"type": "INTEGER"},
+                    "market_thesis": {"type": "STRING"},
+                    "portfolio_diagnosis": {"type": "STRING"},
+                    "recovery_assessment": {"type": "STRING"},
+                    "risk_assessment": {"type": "STRING"},
+                    "suggested_manual_plan": {"type": "STRING"},
+                    "invalidation": {"type": "STRING"},
+                    "mental_note": {"type": "STRING"},
+                },
+                "required": [
+                    "agreement_with_rule",
+                    "confidence_score",
+                    "market_thesis",
+                    "portfolio_diagnosis",
+                    "recovery_assessment",
+                    "risk_assessment",
+                    "suggested_manual_plan",
+                    "invalidation",
+                    "mental_note",
+                ]
+            },
         },
     }
 
@@ -1037,6 +1062,32 @@ Total response under 160 words.
                 "generationConfig": {
                     "temperature": temperature,
                     "maxOutputTokens": fallback_tokens,
+                    "responseMimeType": "application/json",
+                    "responseSchema": {
+                        "type": "OBJECT",
+                        "properties": {
+                            "agreement_with_rule": {"type": "STRING"},
+                            "confidence_score": {"type": "INTEGER"},
+                            "market_thesis": {"type": "STRING"},
+                            "portfolio_diagnosis": {"type": "STRING"},
+                            "recovery_assessment": {"type": "STRING"},
+                            "risk_assessment": {"type": "STRING"},
+                            "suggested_manual_plan": {"type": "STRING"},
+                            "invalidation": {"type": "STRING"},
+                            "mental_note": {"type": "STRING"},
+                        },
+                        "required": [
+                            "agreement_with_rule",
+                            "confidence_score",
+                            "market_thesis",
+                            "portfolio_diagnosis",
+                            "recovery_assessment",
+                            "risk_assessment",
+                            "suggested_manual_plan",
+                            "invalidation",
+                            "mental_note",
+                        ],
+                    },
                 },
             }
 
