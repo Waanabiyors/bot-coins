@@ -6,3 +6,4 @@ state.json
 test_tc_private.py
 test_tc_orders.py
 data/*.csv
+data/llm_usage_state.json
