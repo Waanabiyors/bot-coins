@@ -1,0 +1,31 @@
+name: Debug Network Access
+
+on:
+  workflow_dispatch:
+
+jobs:
+  debug-network:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Show public IP
+        run: |
+          echo "Public IP:"
+          curl -s https://api.ipify.org
+          echo ""
+
+      - name: Show IP info
+        run: |
+          echo "IP info:"
+          curl -s https://ipinfo.io/json || true
+          echo ""
+
+      - name: Test Tokocrypto symbols endpoint
+        run: |
+          echo "Testing Tokocrypto symbols endpoint..."
+          curl -i -L --max-time 30 https://www.tokocrypto.com/open/v1/common/symbols || true
+
+      - name: Test CoinGecko
+        run: |
+          echo "Testing CoinGecko..."
+          curl -i --max-time 30 "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true" || true
