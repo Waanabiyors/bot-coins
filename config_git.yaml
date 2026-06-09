@@ -1,4 +1,4 @@
-symbol: BTCUSDT
+symbol: BTC/USDT
 
 portfolio:
   usdt: 270.35080653
@@ -106,9 +106,6 @@ llm:
       daily_limit: 20
 
     fallback:
-      model: "gemini-2.5-flash"
-      max_output_tokens: 2200
-      daily_limit: 20
       model: "gemini-2.5-flash-lite"
       max_output_tokens: 1500
       daily_limit: 20
@@ -117,11 +114,11 @@ llm:
   # Dipakai kalau main model error, quota/rate limit, output kosong,
   # malformed, atau tidak mengandung END_REVIEW.
   fallback_models:
+    - model: "gemini-2.5-flash"
+      max_output_tokens: 2200
+      daily_limit: 20
     - model: "gemini-2.5-flash-lite"
       max_output_tokens: 1500
-      daily_limit: 20
-    - model: "gemini-2.5-flash"
-      max_output_tokens: 1800
       daily_limit: 20
 
   grounding:
