@@ -627,7 +627,6 @@ def build_repo_reminder(config):
 
     return ""
 
-
 # ============================================================
 # Gemini explanation
 # ============================================================
@@ -667,6 +666,26 @@ def save_llm_usage_state(state):
 
     with open(LLM_USAGE_STATE_FILE, "w", encoding="utf-8") as file:
         json.dump(state, file, indent=2)
+
+
+def get_llm_config_value(llm_cfg, key, legacy_key=None):
+    """
+    Ambil value dari config_git.yaml.
+    Tidak hardcode nama model di code.
+    """
+    value = llm_cfg.get(key)
+
+    if value is None and legacy_key:
+        value = llm_cfg.get(legacy_key)
+
+    if value is None:
+        raise KeyError(f"Missing llm config value: {key}")
+
+    return value
+
+
+def get_llm_config_int(llm_cfg, key, legacy_key=None):
+    return int(get_llm_config_value(llm_cfg, key, legacy_key))
 
 
 def calculate_recovery_gap_pct(config, portfolio):
@@ -769,10 +788,14 @@ def record_grounding_usage():
 
 def choose_gemini_model(config, market, portfolio, decision):
     """
-    Model routing:
-    - Grounding aktif -> pakai grounding_model, default gemini-2.5-flash.
-    - Deep review aktif -> pakai deep_model, default gemini-3.5-flash.
-    - Normal -> pakai default_model, default gemini-3.5-flash.
+    Model routing config-driven:
+    - default review   -> llm.default_model
+    - deep review      -> llm.deep_model
+    - grounding review -> llm.grounding_model
+    - fallback         -> dipakai di generate_gemini_explanation()
+
+    Nama model tidak di-hardcode di code.
+    Kalau mau ganti model, ubah config_git.yaml saja.
     """
     llm_cfg = config.get("llm", {})
 
@@ -780,8 +803,9 @@ def choose_gemini_model(config, market, portfolio, decision):
 
     if use_grounding:
         return {
-            "model": llm_cfg.get("grounding_model", "gemini-2.5-flash"),
-            "max_output_tokens": int(llm_cfg.get("grounding_max_output_tokens", 2000)),
+            "mode": "grounding",
+            "model": get_llm_config_value(llm_cfg, "grounding_model"),
+            "max_output_tokens": get_llm_config_int(llm_cfg, "grounding_max_output_tokens"),
             "use_grounding": True,
             "routing_reason": grounding_reason,
         }
@@ -790,18 +814,21 @@ def choose_gemini_model(config, market, portfolio, decision):
 
     if use_deep:
         return {
-            "model": llm_cfg.get("deep_model", "gemini-3.5-flash"),
-            "max_output_tokens": int(llm_cfg.get("deep_max_output_tokens", 2000)),
+            "mode": "deep",
+            "model": get_llm_config_value(llm_cfg, "deep_model"),
+            "max_output_tokens": get_llm_config_int(llm_cfg, "deep_max_output_tokens"),
             "use_grounding": False,
             "routing_reason": deep_reason,
         }
 
     return {
-        "model": llm_cfg.get("default_model", "gemini-3.5-flash"),
-        "max_output_tokens": int(llm_cfg.get("max_output_tokens", 2000)),
+        "mode": "default",
+        "model": get_llm_config_value(llm_cfg, "default_model", legacy_key="model"),
+        "max_output_tokens": get_llm_config_int(llm_cfg, "default_max_output_tokens", legacy_key="max_output_tokens"),
         "use_grounding": False,
         "routing_reason": "default normal review",
     }
+
 
 def build_rule_summary_for_llm(config, market, portfolio, decision, open_orders):
     return {
@@ -829,6 +856,7 @@ def build_rule_summary_for_llm(config, market, portfolio, decision, open_orders)
         "decision": decision,
         "open_orders": open_orders[:5],
     }
+
 
 def generate_gemini_explanation(config, market, portfolio, decision, open_orders):
     llm_cfg = config.get("llm", {})
@@ -862,7 +890,11 @@ def generate_gemini_explanation(config, market, portfolio, decision, open_orders
         print("[WARN] GEMINI_API_KEY is missing")
         return ai_error_fallback
 
-    routing = choose_gemini_model(config, market, portfolio, decision)
+    try:
+        routing = choose_gemini_model(config, market, portfolio, decision)
+    except Exception as error:
+        print(f"[WARN] Gemini routing failed: {error}")
+        return ai_error_fallback
 
     model = routing["model"]
     max_output_tokens = routing["max_output_tokens"]
@@ -873,8 +905,106 @@ def generate_gemini_explanation(config, market, portfolio, decision, open_orders
 
     context = build_rule_summary_for_llm(config, market, portfolio, decision, open_orders)
 
-    recovery = calculate_recovery_status(config, portfolio)
-    scenario = build_scenario_text(portfolio)
+    def run_fallback_json(reason):
+        """
+        Fallback JSON dipakai kalau:
+        - request utama error HTTP,
+        - response utama kosong,
+        - response utama malformed,
+        - response utama tidak punya END_REVIEW.
+
+        Tujuan: jangan langsung tampil 'unavailable' kalau masih bisa diselamatkan
+        dengan fallback model yang lebih ringan dan JSON-structured.
+        """
+        print(f"[WARN] Trying Gemini fallback JSON because: {reason}")
+
+        try:
+            fallback_model = get_llm_config_value(llm_cfg, "fallback_model")
+            fallback_tokens = get_llm_config_int(llm_cfg, "fallback_max_output_tokens")
+        except Exception as config_error:
+            print(f"[WARN] Gemini fallback config missing: {config_error}")
+            return ai_error_fallback
+
+        fallback_url = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{fallback_model}:generateContent?key={api_key}"
+        )
+
+        fallback_payload = {
+            "contents": [
+                {
+                    "parts": [
+                        {
+                            "text": (
+                                "You are a portfolio-aware BTC market analyst for a manual-only BTC Discipline Agent. "
+                                "Return ONLY valid JSON. No Markdown. No HTML. No code fences. "
+                                "Do not override the rule-engine signal. "
+                                "Do not suggest leverage, futures, margin, auto-trading, or all-in. "
+                                "You may agree or cautiously disagree with the rule-engine signal, but do not override it. "
+                                "If open orders are active, do not recommend extra manual BTC buy orders. "
+                                "If BTC allocation is below target but open orders are active, usually use cautious_agree. "
+                                "Use this JSON schema exactly: "
+                                "{"
+                                "\"agreement_with_rule\":\"agree | cautious_agree | disagree_but_do_not_override\","
+                                "\"confidence_score\":0,"
+                                "\"market_thesis\":\"concise market thesis\","
+                                "\"portfolio_diagnosis\":\"portfolio allocation diagnosis\","
+                                "\"recovery_assessment\":\"recovery realism assessment\","
+                                "\"risk_assessment\":\"main risk assessment\","
+                                "\"suggested_manual_plan\":\"manual-only plan\","
+                                "\"invalidation\":\"specific invalidation condition\","
+                                "\"mental_note\":\"short mental note\""
+                                "} "
+                                f"Data: {context}"
+                            )
+                        }
+                    ]
+                }
+            ],
+            "generationConfig": {
+                "temperature": temperature,
+                "maxOutputTokens": fallback_tokens,
+                "responseMimeType": "application/json",
+            }
+        }
+
+        try:
+            fallback_response = requests.post(fallback_url, json=fallback_payload, timeout=30)
+
+            if not fallback_response.ok:
+                print(
+                    f"[WARN] Gemini fallback error with {fallback_model}: "
+                    f"{fallback_response.status_code} {fallback_response.text}"
+                )
+                return ai_error_fallback
+
+            fallback_data = fallback_response.json()
+            candidates = fallback_data.get("candidates", [])
+            if not candidates:
+                print("[WARN] Gemini fallback returned no candidates")
+                return ai_error_fallback
+
+            parts = candidates[0].get("content", {}).get("parts", [])
+            if not parts:
+                print("[WARN] Gemini fallback returned no parts")
+                return ai_error_fallback
+
+            raw_text = parts[0].get("text", "").strip()
+            if not raw_text:
+                print("[WARN] Gemini fallback returned empty text")
+                return ai_error_fallback
+
+            try:
+                ai_data = extract_json_object(raw_text)
+                return format_ai_review_from_json(ai_data)
+            except Exception as parse_error:
+                print(f"[WARN] Gemini fallback JSON parse failed: {parse_error}")
+                print(f"[WARN] Raw fallback output: {raw_text[:500]}")
+                return ai_error_fallback
+
+        except Exception as fallback_error:
+            print(f"[WARN] Gemini fallback failed: {fallback_error}")
+            return ai_error_fallback
 
     grounding_instruction = ""
     if use_grounding:
@@ -902,6 +1032,7 @@ Do not tell the user to all-in.
 Do not suggest leverage, futures, margin, or high-risk behavior.
 
 Model routing:
+- Mode used: {routing.get("mode")}
 - Model used: {model}
 - Routing reason: {routing_reason}
 - Google Search grounding enabled: {use_grounding}
@@ -995,11 +1126,14 @@ agree | cautious_agree | disagree_but_do_not_override
 <b>Mental Note</b>
 ...
 
-End Review
+END_REVIEW
 
 Keep each section concise.
 Total response under 250 words.
-Do not stop before End Review.
+Do not stop before END_REVIEW.
+
+Data:
+{context}
 """
 
     url = (
@@ -1018,7 +1152,6 @@ Do not stop before End Review.
         "generationConfig": {
             "temperature": temperature,
             "maxOutputTokens": max_output_tokens,
-       
         },
     }
 
@@ -1034,76 +1167,7 @@ Do not stop before End Review.
 
         if not response.ok:
             print(f"[WARN] Gemini error with {model}: {response.status_code} {response.text}")
-
-            fallback_model = llm_cfg.get("fallback_model", "gemini-2.5-flash")
-            fallback_tokens = int(llm_cfg.get("fallback_max_output_tokens", 2000))
-
-            fallback_url = (
-                f"https://generativelanguage.googleapis.com/v1beta/models/"
-                f"{fallback_model}:generateContent?key={api_key}"
-            )
-
-            fallback_payload = {
-                "contents": [
-                    {
-                        "parts": [
-                            {
-                                "text": (
-                                    "You are a portfolio-aware BTC market analyst. "
-                                    "Return ONLY valid JSON. No Markdown. No HTML. No code fences. "
-                                    "Do not override the rule-engine signal. "
-                                    "Do not suggest leverage, futures, margin, auto-trading, or all-in. "
-                                    "You may agree or cautiously disagree with the rule-engine signal, but do not override it. "
-                                    "If open orders are active, do not recommend extra manual BTC buy orders. "
-                                    "Use this JSON schema exactly: "
-                                    "{"
-                                    "\"agreement_with_rule\":\"agree | cautious_agree | disagree_but_do_not_override\","
-                                    "\"confidence_score\":0,"
-                                    "\"market_thesis\":\"concise market thesis\","
-                                    "\"portfolio_diagnosis\":\"portfolio allocation diagnosis\","
-                                    "\"recovery_assessment\":\"recovery realism assessment\","
-                                    "\"risk_assessment\":\"main risk assessment\","
-                                    "\"suggested_manual_plan\":\"manual-only plan\","
-                                    "\"invalidation\":\"specific invalidation condition\","
-                                    "\"mental_note\":\"short mental note\""
-                                    "} "
-                                    #"Buat ringkas dalam Bahasa Indonesia.\n\n"
-                                    f"Data: {context}"
-
-                                )
-                            }
-                        ]
-                    }
-                ],
-                "generationConfig": {
-                    "temperature": temperature,
-                    "maxOutputTokens": fallback_tokens,
-                    "responseMimeType": "application/json",
-                }
-            }
-            fallback_response = requests.post(fallback_url, json=fallback_payload, timeout=30)
-
-            if not fallback_response.ok:
-                print(f"[WARN] Gemini fallback error: {fallback_response.status_code} {fallback_response.text}")
-                return ai_error_fallback
-
-            data = fallback_response.json()
-            candidates = data.get("candidates", [])
-            if not candidates:
-                return ai_error_fallback
-
-            parts = candidates[0].get("content", {}).get("parts", [])
-            if not parts:
-                return ai_error_fallback
-
-            raw_text = parts[0].get("text", "").strip()
-
-            if "END_REVIEW" not in raw_text:
-                print(f"[WARN] Gemini HTML output incomplete: {raw_text[:500]}")
-                return ai_error_fallback
-            raw_text = raw_text.replace("END_REVIEW", "").strip()
-            return clean_ai_explanation(raw_text)
-
+            return run_fallback_json(f"main request HTTP error {response.status_code}")
 
         data = response.json()
 
@@ -1112,145 +1176,35 @@ Do not stop before End Review.
 
         candidates = data.get("candidates", [])
         if not candidates:
-            return ai_error_fallback
+            return run_fallback_json("main response has no candidates")
 
         parts = candidates[0].get("content", {}).get("parts", [])
         if not parts:
-            return ai_error_fallback
+            return run_fallback_json("main response has no parts")
 
         raw_text = parts[0].get("text", "").strip()
-        if "END_REVIEW" not in raw_text:
+        if not raw_text:
+            return run_fallback_json("main response text is empty")
+
+        end_markers = ["END_REVIEW", "End Review", "END REVIEW"]
+        if not any(marker in raw_text for marker in end_markers):
             print(f"[WARN] Gemini HTML output incomplete: {raw_text[:500]}")
-            return ai_error_fallback
-        raw_text = raw_text.replace("END_REVIEW", "").strip()
-        return clean_ai_explanation(raw_text)
-                
-    except Exception as error:
-        print(f"[WARN] Gemini failed: {error}")
-        return ai_error_fallback
+            return run_fallback_json("main HTML output missing END_REVIEW")
 
-'''
-def generate_gemini_explanation(config, market, portfolio, decision, open_orders):
-    llm_cfg = config.get("llm", {})
-    if not llm_cfg.get("enabled", False):
-        return ""
+        for marker in end_markers:
+            raw_text = raw_text.replace(marker, "")
 
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        return ""
+        cleaned_text = clean_ai_explanation(raw_text)
 
-    model = llm_cfg.get("model", "gemini-2.5-flash-lite")
-    max_output_tokens = int(llm_cfg.get("max_output_tokens", 850))
-    temperature = float(llm_cfg.get("temperature", 0.2))
+        if not cleaned_text:
+            return run_fallback_json("cleaned main HTML output is empty")
 
-    context = build_rule_summary_for_llm(config, market, portfolio, decision, open_orders)
-
-    prompt = f"""
-You are a crypto decision-support explainer.
-You are NOT allowed to recommend auto-trading.
-You must respect the rule-engine signal.
-Do not override the signal.
-Do not tell the user to all-in.
-Do not suggest leverage, futures, margin, or high-risk behavior.
-
-Explain the following BTC/USDT decision in Indonesian, concise but clear.
-Focus on risk, position sizing, recovery, and mental discipline.
-
-IMPORTANT TELEGRAM FORMAT RULES:
-- Output must use Telegram-compatible HTML.
-- Use <b>...</b> for section labels.
-- Do NOT use Markdown.
-- Do NOT use **bold**.
-- Do NOT use bullet symbols with asterisks.
-- Do NOT wrap the output in code fences.
-- Only use these section labels:
-  <b>AI Explanation</b>
-  <b>Market</b>
-  <b>Portfolio</b>
-  <b>Recovery</b>
-  <b>Action</b>
-  <b>Invalidation</b>
-  <b>Mental note</b>
-
-You must include what would invalidate the current signal.
-You must mention whether the current BTC allocation is too low, balanced, or too high for the user's recovery goal.
-You must prioritize mental stability over aggressive recovery.
-
-If btc_pct is below target_btc_min_pct, say the BTC allocation is BELOW TARGET for recovery mode, not balanced.
-If btc_pct is between target_btc_min_pct and target_btc_max_pct, say it is balanced.
-If btc_pct is above target_btc_max_pct, say it is too aggressive.
-
-Data:
-{context}
-
-Output format exactly:
-
-<b>AI Explanation</b>
-
-<b>Market</b>
-...
-
-<b>Portfolio</b>
-...
-
-<b>Recovery</b>
-...
-
-<b>Action</b>
-...
-
-<b>Invalidation</b>
-...
-
-<b>Mental note</b>
-...
-
-Keep the explanation under 180 words.
-Do not repeat all numeric data already shown in the main report.
-Be concise.
-"""
-
-    url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{model}:generateContent?key={api_key}"
-    )
-
-    payload = {
-        "contents": [
-            {
-                "parts": [
-                    {"text": prompt}
-                ]
-            }
-        ],
-        "generationConfig": {
-            "temperature": temperature,
-            "maxOutputTokens": max_output_tokens,
-        },
-    }
-
-    try:
-        response = requests.post(url, json=payload, timeout=30)
-
-        if not response.ok:
-            print(f"[WARN] Gemini error: {response.status_code} {response.text}")
-            return ""
-
-        data = response.json()
-        candidates = data.get("candidates", [])
-        if not candidates:
-            return ""
-
-        parts = candidates[0].get("content", {}).get("parts", [])
-        if not parts:
-            return ""
-
-        return parts[0].get("text", "").strip()
+        return cleaned_text
 
     except Exception as error:
         print(f"[WARN] Gemini failed: {error}")
-        return ""
-'''
+        return run_fallback_json(f"main request exception: {error}")
+
 
 def extract_json_object(text):
     """
@@ -1305,13 +1259,13 @@ def format_ai_review_from_json(ai_data):
         confidence_score = int(round(confidence_score))
     except Exception:
         confidence_score = ai_data["confidence_score"]
+
     return (
         f"<b>AI Analyst Review</b>\n\n"
         f"<b>Rule Agreement</b>\n"
         f"{esc(ai_data['agreement_with_rule'])}\n\n"
         f"<b>Confidence</b>\n"
         f"<b>{esc(confidence_score)}/100</b>\n\n"
-        #f"{esc(ai_data['confidence_score'])}/100\n\n"
         f"<b>Market Thesis</b>\n"
         f"{esc(ai_data['market_thesis'])}\n\n"
         f"<b>Portfolio Diagnosis</b>\n"
@@ -1327,6 +1281,7 @@ def format_ai_review_from_json(ai_data):
         f"<b>Mental Note</b>\n"
         f"{esc(ai_data['mental_note'])}"
     )
+
 
 def clean_ai_explanation(text):
     """
@@ -1412,6 +1367,7 @@ def clean_ai_explanation(text):
             text += "".join(f"</{tag}>" for _ in range(open_count - close_count))
 
     return text.strip()
+
 
 # ============================================================
 # Recovery and scenario analysis

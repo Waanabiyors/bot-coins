@@ -75,40 +75,41 @@ safety:
 
 llm:
   enabled: true
-  provider: gemini
-  output_language: english
-
-  default_model: gemini-3.5-flash
-  deep_model: gemini-3.5-flash
-  fallback_model: gemini-3.5-flash
-  grounding_model: gemini-2.5-flash
-
-  max_output_tokens: 2000
-  deep_max_output_tokens: 2000
-  fallback_max_output_tokens: 2000
-  grounding_max_output_tokens: 2000
-
   temperature: 0.2
-  fallback_to_rule_message: true
+
+  # Normal deterministic review
+  default_model: "gemini-3.5-flash"
+  default_max_output_tokens: 2000
+
+  # Deep analysis review
+  deep_model: "gemini-3.5-flash"
+  deep_max_output_tokens: 2500
+
+  # Grounded review
+  # Free tier: pakai 2.5 Flash untuk Google Search grounding.
+  grounding_model: "gemini-2.5-flash"
+  grounding_max_output_tokens: 2500
+
+  # Fallback JSON mode
+  fallback_model: "gemini-2.5-flash-lite"
+  fallback_max_output_tokens: 1500
 
   deep_review:
     enabled: true
+    high_volatility_24h_abs_pct: 4
     use_pro_on_high_volatility: true
     use_pro_on_action_signal: true
     use_pro_on_recovery_risk: true
-    high_volatility_24h_abs_pct: 4
     recovery_gap_pct_threshold: 10
 
   grounding:
-    enabled: true
-    use_google_search: true
-    use_on_high_volatility: true
+    enabled: false
+    use_google_search: false
+    max_grounded_runs_per_day: 4
+    daily_review_utc_hours: []
     use_on_daily_review: true
+    use_on_high_volatility: true
     use_on_action_signal: false
-    daily_review_utc_hours:
-      - 0
-      - 12
-    max_grounded_runs_per_day: 6
 
 recovery:
   initial_capital_usdt: 380
