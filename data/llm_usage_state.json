@@ -4,21 +4,21 @@
   "last_grounding_bucket_utc": "2026-06-09T16:00Z",
   "models": {
     "gemini-3.5-flash": {
-      "requests_today": 7,
+      "requests_today": 8,
       "success_today": 1,
-      "errors_today": 6,
-      "last_used_utc": "2026-06-09T17:01:07.975857+00:00",
+      "errors_today": 7,
+      "last_used_utc": "2026-06-09T18:00:59.935975+00:00",
       "last_status": "http_error",
       "last_mode": "deep_primary",
       "last_response_status": 503,
       "last_error": "{\n  \"error\": {\n    \"code\": 503,\n    \"message\": \"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\n    \"status\": \"UNAVAILABLE\"\n  }\n}\n",
-      "cooldown_until_utc": "2026-06-09T17:16:07.975867+00:00"
+      "cooldown_until_utc": "2026-06-09T18:15:59.935988+00:00"
     },
     "gemini-2.5-flash-lite": {
-      "requests_today": 7,
-      "success_today": 7,
+      "requests_today": 8,
+      "success_today": 8,
       "errors_today": 0,
-      "last_used_utc": "2026-06-09T17:01:11.452450+00:00",
+      "last_used_utc": "2026-06-09T18:01:32.441768+00:00",
       "last_status": "ok",
       "last_mode": "fallback_json",
       "last_response_status": 200,
@@ -26,14 +26,14 @@
       "cooldown_until_utc": ""
     },
     "gemini-2.5-flash": {
-      "requests_today": 6,
+      "requests_today": 7,
       "success_today": 1,
-      "errors_today": 5,
-      "last_used_utc": "2026-06-09T17:01:08.648482+00:00",
-      "last_status": "http_error",
+      "errors_today": 6,
+      "last_used_utc": "2026-06-09T18:01:30.006836+00:00",
+      "last_status": "exception",
       "last_mode": "fallback_json",
       "last_response_status": 503,
-      "last_error": "{\n  \"error\": {\n    \"code\": 503,\n    \"message\": \"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\n    \"status\": \"UNAVAILABLE\"\n  }\n}\n",
+      "last_error": "HTTPSConnectionPool(host='generativelanguage.googleapis.com', port=443): Read timed out. (read timeout=30)",
       "cooldown_until_utc": "2026-06-09T17:16:08.648492+00:00"
     }
   }
