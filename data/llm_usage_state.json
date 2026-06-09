@@ -1,0 +1,18 @@
+{
+  "date_utc": "2026-06-09",
+  "grounded_runs_today": 0,
+  "last_grounding_bucket_utc": "",
+  "models": {
+    "gemini-3.5-flash": {
+      "requests_today": 1,
+      "success_today": 1,
+      "errors_today": 0,
+      "last_used_utc": "2026-06-09T09:54:19.424710+00:00",
+      "last_status": "ok",
+      "last_mode": "deep_primary",
+      "last_response_status": 200,
+      "last_error": "",
+      "cooldown_until_utc": ""
+    }
+  }
+}
