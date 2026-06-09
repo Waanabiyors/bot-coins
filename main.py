@@ -634,58 +634,209 @@ def build_repo_reminder(config):
 LLM_USAGE_STATE_FILE = "data/llm_usage_state.json"
 
 
-def load_llm_usage_state():
-    os.makedirs("data", exist_ok=True)
+def get_llm_state_file(config=None):
+    if config is None:
+        return LLM_USAGE_STATE_FILE
 
-    if not os.path.exists(LLM_USAGE_STATE_FILE):
+    llm_cfg = config.get("llm", {})
+    quota_cfg = llm_cfg.get("quota_guard", {})
+    return quota_cfg.get("state_file", LLM_USAGE_STATE_FILE)
+
+
+def load_llm_usage_state(config=None):
+    state_file = get_llm_state_file(config)
+    os.makedirs(os.path.dirname(state_file) or ".", exist_ok=True)
+
+    today = datetime.now(timezone.utc).date().isoformat()
+
+    if not os.path.exists(state_file):
         return {
-            "date_utc": datetime.now(timezone.utc).date().isoformat(),
+            "date_utc": today,
             "grounded_runs_today": 0,
+            "last_grounding_bucket_utc": "",
+            "models": {},
         }
 
     try:
-        with open(LLM_USAGE_STATE_FILE, "r", encoding="utf-8") as file:
+        with open(state_file, "r", encoding="utf-8") as file:
             state = json.load(file)
     except Exception:
         state = {}
-
-    today = datetime.now(timezone.utc).date().isoformat()
 
     if state.get("date_utc") != today:
         return {
             "date_utc": today,
             "grounded_runs_today": 0,
+            "last_grounding_bucket_utc": "",
+            "models": {},
         }
 
     state.setdefault("grounded_runs_today", 0)
+    state.setdefault("last_grounding_bucket_utc", "")
+    state.setdefault("models", {})
     return state
 
 
-def save_llm_usage_state(state):
-    os.makedirs("data", exist_ok=True)
+def save_llm_usage_state(state, config=None):
+    state_file = get_llm_state_file(config)
+    os.makedirs(os.path.dirname(state_file) or ".", exist_ok=True)
 
-    with open(LLM_USAGE_STATE_FILE, "w", encoding="utf-8") as file:
+    with open(state_file, "w", encoding="utf-8") as file:
         json.dump(state, file, indent=2)
 
 
-def get_llm_config_value(llm_cfg, key, legacy_key=None):
-    """
-    Ambil value dari config_git.yaml.
-    Tidak hardcode nama model di code.
-    """
-    value = llm_cfg.get(key)
+def parse_utc_datetime(value):
+    if not value:
+        return None
 
-    if value is None and legacy_key:
-        value = llm_cfg.get(legacy_key)
-
-    if value is None:
-        raise KeyError(f"Missing llm config value: {key}")
-
-    return value
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except Exception:
+        return None
 
 
-def get_llm_config_int(llm_cfg, key, legacy_key=None):
-    return int(get_llm_config_value(llm_cfg, key, legacy_key))
+def get_grounding_bucket_utc(interval_hours):
+    now = datetime.now(timezone.utc)
+    bucket_hour = (now.hour // interval_hours) * interval_hours
+    return f"{now.date().isoformat()}T{bucket_hour:02d}:00Z"
+
+
+def get_llm_model_config(llm_cfg, model_key):
+    models_cfg = llm_cfg.get("models", {})
+    model_cfg = models_cfg.get(model_key)
+
+    if not model_cfg:
+        raise KeyError(f"Missing llm.models.{model_key} config")
+
+    model = model_cfg.get("model")
+    if not model:
+        raise KeyError(f"Missing model name for llm.models.{model_key}")
+
+    max_output_tokens = int(model_cfg.get("max_output_tokens", 2000))
+    daily_limit = int(model_cfg.get("daily_limit", 20))
+
+    return {
+        "model": model,
+        "max_output_tokens": max_output_tokens,
+        "daily_limit": daily_limit,
+    }
+
+
+def get_fallback_model_configs(llm_cfg):
+    fallback_models = llm_cfg.get("fallback_models", [])
+
+    if fallback_models:
+        configs = []
+        for item in fallback_models:
+            model = item.get("model")
+            if not model:
+                continue
+
+            configs.append({
+                "model": model,
+                "max_output_tokens": int(item.get("max_output_tokens", 1500)),
+                "daily_limit": int(item.get("daily_limit", 20)),
+            })
+
+        if configs:
+            return configs
+
+    fallback_cfg = get_llm_model_config(llm_cfg, "fallback")
+    return [fallback_cfg]
+
+
+def get_model_usage_entry(state, model):
+    models = state.setdefault("models", {})
+    entry = models.setdefault(model, {
+        "requests_today": 0,
+        "success_today": 0,
+        "errors_today": 0,
+        "last_used_utc": "",
+        "last_status": "",
+        "last_mode": "",
+        "last_response_status": "",
+        "last_error": "",
+        "cooldown_until_utc": "",
+    })
+    return entry
+
+
+def is_model_available(config, model, daily_limit):
+    llm_cfg = config.get("llm", {})
+    quota_cfg = llm_cfg.get("quota_guard", {})
+
+    if not quota_cfg.get("enabled", True):
+        return True, "quota guard disabled"
+
+    state = load_llm_usage_state(config)
+    entry = get_model_usage_entry(state, model)
+
+    cooldown_until = parse_utc_datetime(entry.get("cooldown_until_utc"))
+    now = datetime.now(timezone.utc)
+
+    if cooldown_until and now < cooldown_until:
+        return False, f"model cooldown until {cooldown_until.isoformat()}"
+
+    reserve = int(quota_cfg.get("reserve_requests_per_model", 0))
+    usable_limit = max(0, int(daily_limit) - reserve)
+
+    requests_today = int(entry.get("requests_today", 0))
+    if requests_today >= usable_limit:
+        return False, f"daily model limit reached: {requests_today}/{usable_limit}"
+
+    return True, f"model available: {requests_today}/{usable_limit}"
+
+
+def record_llm_model_usage(
+    config,
+    model,
+    mode,
+    use_grounding=False,
+    status="ok",
+    response_status=None,
+    error_message="",
+):
+    state = load_llm_usage_state(config)
+    entry = get_model_usage_entry(state, model)
+
+    entry["requests_today"] = int(entry.get("requests_today", 0)) + 1
+    entry["last_used_utc"] = datetime.now(timezone.utc).isoformat()
+    entry["last_status"] = str(status)
+    entry["last_mode"] = str(mode)
+
+    if response_status is not None:
+        entry["last_response_status"] = response_status
+
+    if error_message:
+        entry["last_error"] = str(error_message)[:500]
+
+    if status == "ok":
+        entry["success_today"] = int(entry.get("success_today", 0)) + 1
+        entry["cooldown_until_utc"] = ""
+    else:
+        entry["errors_today"] = int(entry.get("errors_today", 0)) + 1
+
+    if response_status == 429:
+        cooldown_minutes = int(
+            config.get("llm", {})
+            .get("quota_guard", {})
+            .get("rate_limit_cooldown_minutes", 15)
+        )
+        cooldown_until = datetime.now(timezone.utc) + pd.Timedelta(minutes=cooldown_minutes)
+        entry["cooldown_until_utc"] = cooldown_until.isoformat()
+
+    if use_grounding:
+        state["grounded_runs_today"] = int(state.get("grounded_runs_today", 0)) + 1
+
+        interval_hours = int(
+            config.get("llm", {})
+            .get("grounding", {})
+            .get("interval_hours", 4)
+        )
+        if interval_hours > 0:
+            state["last_grounding_bucket_utc"] = get_grounding_bucket_utc(interval_hours)
+
+    save_llm_usage_state(state, config)
 
 
 def calculate_recovery_gap_pct(config, portfolio):
@@ -717,31 +868,6 @@ def is_action_signal(decision):
     return not any(keyword in signal for keyword in passive_keywords)
 
 
-def should_use_deep_model(config, market, portfolio, decision):
-    llm_cfg = config.get("llm", {})
-    deep_cfg = llm_cfg.get("deep_review", {})
-
-    if not deep_cfg.get("enabled", False):
-        return False, "deep_review disabled"
-
-    abs_24h = abs(float(market.get("change_24h", 0)))
-    high_vol_threshold = float(deep_cfg.get("high_volatility_24h_abs_pct", 4))
-
-    if deep_cfg.get("use_pro_on_high_volatility", True) and abs_24h >= high_vol_threshold:
-        return True, f"high volatility: 24h change {abs_24h:.2f}%"
-
-    if deep_cfg.get("use_pro_on_action_signal", True) and is_action_signal(decision):
-        return True, f"action signal: {decision.get('signal')}"
-
-    recovery_gap_pct = calculate_recovery_gap_pct(config, portfolio)
-    recovery_threshold = float(deep_cfg.get("recovery_gap_pct_threshold", 10))
-
-    if deep_cfg.get("use_pro_on_recovery_risk", True) and recovery_gap_pct >= recovery_threshold:
-        return True, f"recovery gap high: {recovery_gap_pct:.1f}%"
-
-    return False, "normal review"
-
-
 def should_use_google_grounding(config, market, decision):
     llm_cfg = config.get("llm", {})
     grounding_cfg = llm_cfg.get("grounding", {})
@@ -752,17 +878,27 @@ def should_use_google_grounding(config, market, decision):
     if not grounding_cfg.get("use_google_search", False):
         return False, "google search disabled"
 
-    usage_state = load_llm_usage_state()
-    max_grounded = int(grounding_cfg.get("max_grounded_runs_per_day", 4))
+    state = load_llm_usage_state(config)
+    max_grounded = int(grounding_cfg.get("max_grounded_runs_per_day", 6))
 
-    if usage_state.get("grounded_runs_today", 0) >= max_grounded:
+    if int(state.get("grounded_runs_today", 0)) >= max_grounded:
         return False, "daily grounding cap reached"
 
     now_hour = datetime.now(timezone.utc).hour
-    daily_hours = grounding_cfg.get("daily_review_utc_hours", [])
+    interval_hours = int(grounding_cfg.get("interval_hours", 4))
 
-    if grounding_cfg.get("use_on_daily_review", True) and now_hour in daily_hours:
-        return True, f"daily grounded review hour UTC={now_hour}"
+    if (
+        grounding_cfg.get("use_on_interval", True)
+        and interval_hours > 0
+        and now_hour % interval_hours == 0
+    ):
+        current_bucket = get_grounding_bucket_utc(interval_hours)
+        last_bucket = state.get("last_grounding_bucket_utc", "")
+
+        if last_bucket == current_bucket:
+            return False, f"grounding already used for bucket {current_bucket}"
+
+        return True, f"grounding interval hit: every {interval_hours}h UTC"
 
     abs_24h = abs(float(market.get("change_24h", 0)))
     high_vol_threshold = float(
@@ -774,60 +910,120 @@ def should_use_google_grounding(config, market, decision):
     if grounding_cfg.get("use_on_high_volatility", True) and abs_24h >= high_vol_threshold:
         return True, f"grounding due to high volatility: {abs_24h:.2f}%"
 
-    if grounding_cfg.get("use_on_action_signal", False) and is_action_signal(decision):
+    if grounding_cfg.get("use_on_action_signal", True) and is_action_signal(decision):
         return True, f"grounding due to action signal: {decision.get('signal')}"
 
     return False, "grounding not needed"
 
 
-def record_grounding_usage():
-    state = load_llm_usage_state()
-    state["grounded_runs_today"] = int(state.get("grounded_runs_today", 0)) + 1
-    save_llm_usage_state(state)
-
-
 def choose_gemini_model(config, market, portfolio, decision):
     """
-    Model routing config-driven:
-    - default review   -> llm.default_model
-    - deep review      -> llm.deep_model
-    - grounding review -> llm.grounding_model
-    - fallback         -> dipakai di generate_gemini_explanation()
+    Hourly deep-first quota-aware routing.
+
+    Priority:
+    1. Grounding every configured interval, if enabled and quota available.
+    2. Deep primary model, usually Gemini 3.5 Flash.
+    3. Deep secondary model, usually Gemini 2.5 Flash.
+    4. Fallback model as quota fallback before request.
 
     Nama model tidak di-hardcode di code.
-    Kalau mau ganti model, ubah config_git.yaml saja.
+    Semua nama model dan daily limit dibaca dari config_git.yaml.
     """
     llm_cfg = config.get("llm", {})
 
     use_grounding, grounding_reason = should_use_google_grounding(config, market, decision)
 
     if use_grounding:
-        return {
-            "mode": "grounding",
-            "model": get_llm_config_value(llm_cfg, "grounding_model"),
-            "max_output_tokens": get_llm_config_int(llm_cfg, "grounding_max_output_tokens"),
-            "use_grounding": True,
-            "routing_reason": grounding_reason,
-        }
+        grounding_cfg = get_llm_model_config(llm_cfg, "grounding")
+        grounding_model = grounding_cfg["model"]
+        grounding_available, grounding_availability_reason = is_model_available(
+            config,
+            grounding_model,
+            grounding_cfg["daily_limit"],
+        )
 
-    use_deep, deep_reason = should_use_deep_model(config, market, portfolio, decision)
+        if grounding_available:
+            return {
+                "mode": "grounding",
+                "model": grounding_model,
+                "max_output_tokens": grounding_cfg["max_output_tokens"],
+                "daily_limit": grounding_cfg["daily_limit"],
+                "use_grounding": True,
+                "routing_reason": grounding_reason,
+                "quota_reason": grounding_availability_reason,
+                "ai_source": "planned_main_html",
+            }
 
-    if use_deep:
-        return {
-            "mode": "deep",
-            "model": get_llm_config_value(llm_cfg, "deep_model"),
-            "max_output_tokens": get_llm_config_int(llm_cfg, "deep_max_output_tokens"),
-            "use_grounding": False,
-            "routing_reason": deep_reason,
-        }
+        print(f"[WARN] Grounding model unavailable: {grounding_availability_reason}")
 
-    return {
-        "mode": "default",
-        "model": get_llm_config_value(llm_cfg, "default_model", legacy_key="model"),
-        "max_output_tokens": get_llm_config_int(llm_cfg, "default_max_output_tokens", legacy_key="max_output_tokens"),
-        "use_grounding": False,
-        "routing_reason": "default normal review",
-    }
+    hourly_deep_cfg = llm_cfg.get("hourly_deep", {})
+    if hourly_deep_cfg.get("enabled", True):
+        primary_cfg = get_llm_model_config(llm_cfg, "deep_primary")
+        primary_model = primary_cfg["model"]
+        primary_available, primary_reason = is_model_available(
+            config,
+            primary_model,
+            primary_cfg["daily_limit"],
+        )
+
+        if primary_available:
+            return {
+                "mode": "deep_primary",
+                "model": primary_model,
+                "max_output_tokens": primary_cfg["max_output_tokens"],
+                "daily_limit": primary_cfg["daily_limit"],
+                "use_grounding": False,
+                "routing_reason": "hourly deep analysis using primary model",
+                "quota_reason": primary_reason,
+                "ai_source": "planned_main_html",
+            }
+
+        secondary_cfg = get_llm_model_config(llm_cfg, "deep_secondary")
+        secondary_model = secondary_cfg["model"]
+        secondary_available, secondary_reason = is_model_available(
+            config,
+            secondary_model,
+            secondary_cfg["daily_limit"],
+        )
+
+        if secondary_available:
+            return {
+                "mode": "deep_secondary",
+                "model": secondary_model,
+                "max_output_tokens": secondary_cfg["max_output_tokens"],
+                "daily_limit": secondary_cfg["daily_limit"],
+                "use_grounding": False,
+                "routing_reason": f"primary model unavailable: {primary_reason}",
+                "quota_reason": secondary_reason,
+                "ai_source": "planned_main_html",
+            }
+
+        print(f"[WARN] Deep primary unavailable: {primary_reason}")
+        print(f"[WARN] Deep secondary unavailable: {secondary_reason}")
+
+    fallback_configs = get_fallback_model_configs(llm_cfg)
+
+    for fallback_cfg in fallback_configs:
+        fallback_model = fallback_cfg["model"]
+        fallback_available, fallback_reason = is_model_available(
+            config,
+            fallback_model,
+            fallback_cfg["daily_limit"],
+        )
+
+        if fallback_available:
+            return {
+                "mode": "quota_fallback",
+                "model": fallback_model,
+                "max_output_tokens": fallback_cfg["max_output_tokens"],
+                "daily_limit": fallback_cfg["daily_limit"],
+                "use_grounding": False,
+                "routing_reason": "all preferred models unavailable; using fallback as main request",
+                "quota_reason": fallback_reason,
+                "ai_source": "planned_main_html",
+            }
+
+    raise RuntimeError("No available Gemini model quota left for this run.")
 
 
 def build_rule_summary_for_llm(config, market, portfolio, decision, open_orders):
@@ -888,12 +1084,28 @@ def generate_gemini_explanation(config, market, portfolio, decision, open_orders
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         print("[WARN] GEMINI_API_KEY is missing")
+        config["_last_llm_routing"] = {
+            "mode": "unavailable",
+            "model": "none",
+            "use_grounding": False,
+            "routing_reason": "GEMINI_API_KEY is missing",
+            "quota_reason": "",
+            "ai_source": "unavailable",
+        }
         return ai_error_fallback
 
     try:
         routing = choose_gemini_model(config, market, portfolio, decision)
     except Exception as error:
         print(f"[WARN] Gemini routing failed: {error}")
+        config["_last_llm_routing"] = {
+            "mode": "unavailable",
+            "model": "none",
+            "use_grounding": False,
+            "routing_reason": f"Gemini routing failed: {error}",
+            "quota_reason": "",
+            "ai_source": "unavailable",
+        }
         return ai_error_fallback
 
     model = routing["model"]
@@ -905,106 +1117,165 @@ def generate_gemini_explanation(config, market, portfolio, decision, open_orders
 
     context = build_rule_summary_for_llm(config, market, portfolio, decision, open_orders)
 
+    def set_last_routing(base_routing, ai_source, request_status=""):
+        stored = dict(base_routing)
+        stored["ai_source"] = ai_source
+        stored["request_status"] = request_status
+        config["_last_llm_routing"] = stored
+
     def run_fallback_json(reason):
         """
         Fallback JSON dipakai kalau:
-        - request utama error HTTP,
+        - main model HTTP error,
+        - main model quota/rate-limit error,
         - response utama kosong,
-        - response utama malformed,
-        - response utama tidak punya END_REVIEW.
+        - response malformed,
+        - response tidak punya END_REVIEW.
 
-        Tujuan: jangan langsung tampil 'unavailable' kalau masih bisa diselamatkan
-        dengan fallback model yang lebih ringan dan JSON-structured.
+        Fallback dicoba berantai sesuai llm.fallback_models di config_git.yaml.
         """
         print(f"[WARN] Trying Gemini fallback JSON because: {reason}")
 
-        try:
-            fallback_model = get_llm_config_value(llm_cfg, "fallback_model")
-            fallback_tokens = get_llm_config_int(llm_cfg, "fallback_max_output_tokens")
-        except Exception as config_error:
-            print(f"[WARN] Gemini fallback config missing: {config_error}")
-            return ai_error_fallback
+        fallback_configs = get_fallback_model_configs(llm_cfg)
 
-        fallback_url = (
-            f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{fallback_model}:generateContent?key={api_key}"
-        )
+        for fallback_cfg in fallback_configs:
+            fallback_model = fallback_cfg["model"]
+            fallback_tokens = fallback_cfg["max_output_tokens"]
+            fallback_daily_limit = fallback_cfg["daily_limit"]
 
-        fallback_payload = {
-            "contents": [
-                {
-                    "parts": [
-                        {
-                            "text": (
-                                "You are a portfolio-aware BTC market analyst for a manual-only BTC Discipline Agent. "
-                                "Return ONLY valid JSON. No Markdown. No HTML. No code fences. "
-                                "Do not override the rule-engine signal. "
-                                "Do not suggest leverage, futures, margin, auto-trading, or all-in. "
-                                "You may agree or cautiously disagree with the rule-engine signal, but do not override it. "
-                                "If open orders are active, do not recommend extra manual BTC buy orders. "
-                                "If BTC allocation is below target but open orders are active, usually use cautious_agree. "
-                                "Use this JSON schema exactly: "
-                                "{"
-                                "\"agreement_with_rule\":\"agree | cautious_agree | disagree_but_do_not_override\","
-                                "\"confidence_score\":0,"
-                                "\"market_thesis\":\"concise market thesis\","
-                                "\"portfolio_diagnosis\":\"portfolio allocation diagnosis\","
-                                "\"recovery_assessment\":\"recovery realism assessment\","
-                                "\"risk_assessment\":\"main risk assessment\","
-                                "\"suggested_manual_plan\":\"manual-only plan\","
-                                "\"invalidation\":\"specific invalidation condition\","
-                                "\"mental_note\":\"short mental note\""
-                                "} "
-                                f"Data: {context}"
-                            )
-                        }
-                    ]
-                }
-            ],
-            "generationConfig": {
-                "temperature": temperature,
-                "maxOutputTokens": fallback_tokens,
-                "responseMimeType": "application/json",
+            fallback_available, fallback_reason = is_model_available(
+                config,
+                fallback_model,
+                fallback_daily_limit,
+            )
+
+            if not fallback_available:
+                print(f"[WARN] Skipping fallback model {fallback_model}: {fallback_reason}")
+                continue
+
+            fallback_routing = {
+                "mode": "fallback_json",
+                "model": fallback_model,
+                "max_output_tokens": fallback_tokens,
+                "daily_limit": fallback_daily_limit,
+                "use_grounding": False,
+                "routing_reason": f"fallback JSON because: {reason}",
+                "quota_reason": fallback_reason,
+                "ai_source": "fallback_json",
             }
-        }
 
-        try:
-            fallback_response = requests.post(fallback_url, json=fallback_payload, timeout=30)
+            fallback_url = (
+                f"https://generativelanguage.googleapis.com/v1beta/models/"
+                f"{fallback_model}:generateContent?key={api_key}"
+            )
 
-            if not fallback_response.ok:
-                print(
-                    f"[WARN] Gemini fallback error with {fallback_model}: "
-                    f"{fallback_response.status_code} {fallback_response.text}"
-                )
-                return ai_error_fallback
-
-            fallback_data = fallback_response.json()
-            candidates = fallback_data.get("candidates", [])
-            if not candidates:
-                print("[WARN] Gemini fallback returned no candidates")
-                return ai_error_fallback
-
-            parts = candidates[0].get("content", {}).get("parts", [])
-            if not parts:
-                print("[WARN] Gemini fallback returned no parts")
-                return ai_error_fallback
-
-            raw_text = parts[0].get("text", "").strip()
-            if not raw_text:
-                print("[WARN] Gemini fallback returned empty text")
-                return ai_error_fallback
+            fallback_payload = {
+                "contents": [
+                    {
+                        "parts": [
+                            {
+                                "text": (
+                                    "You are a portfolio-aware BTC market analyst for a manual-only BTC Discipline Agent. "
+                                    "Return ONLY valid JSON. No Markdown. No HTML. No code fences. "
+                                    "Do not override the rule-engine signal. "
+                                    "Do not suggest leverage, futures, margin, auto-trading, or all-in. "
+                                    "You may agree or cautiously disagree with the rule-engine signal, but do not override it. "
+                                    "If open orders are active, do not recommend extra manual BTC buy orders. "
+                                    "If BTC allocation is below target but open orders are active, usually use cautious_agree. "
+                                    "Use this JSON schema exactly: "
+                                    "{"
+                                    "\"agreement_with_rule\":\"agree | cautious_agree | disagree_but_do_not_override\","
+                                    "\"confidence_score\":0,"
+                                    "\"market_thesis\":\"concise market thesis\","
+                                    "\"portfolio_diagnosis\":\"portfolio allocation diagnosis\","
+                                    "\"recovery_assessment\":\"recovery realism assessment\","
+                                    "\"risk_assessment\":\"main risk assessment\","
+                                    "\"suggested_manual_plan\":\"manual-only plan\","
+                                    "\"invalidation\":\"specific invalidation condition\","
+                                    "\"mental_note\":\"short mental note\""
+                                    "} "
+                                    f"Data: {context}"
+                                )
+                            }
+                        ]
+                    }
+                ],
+                "generationConfig": {
+                    "temperature": temperature,
+                    "maxOutputTokens": fallback_tokens,
+                    "responseMimeType": "application/json",
+                }
+            }
 
             try:
-                ai_data = extract_json_object(raw_text)
-                return format_ai_review_from_json(ai_data)
-            except Exception as parse_error:
-                print(f"[WARN] Gemini fallback JSON parse failed: {parse_error}")
-                print(f"[WARN] Raw fallback output: {raw_text[:500]}")
-                return ai_error_fallback
+                fallback_response = requests.post(fallback_url, json=fallback_payload, timeout=30)
 
-        except Exception as fallback_error:
-            print(f"[WARN] Gemini fallback failed: {fallback_error}")
-            return ai_error_fallback
+                record_llm_model_usage(
+                    config=config,
+                    model=fallback_model,
+                    mode="fallback_json",
+                    use_grounding=False,
+                    status="ok" if fallback_response.ok else "http_error",
+                    response_status=fallback_response.status_code,
+                    error_message=fallback_response.text if not fallback_response.ok else "",
+                )
+
+                if not fallback_response.ok:
+                    print(
+                        f"[WARN] Gemini fallback error with {fallback_model}: "
+                        f"{fallback_response.status_code} {fallback_response.text}"
+                    )
+                    continue
+
+                fallback_data = fallback_response.json()
+                candidates = fallback_data.get("candidates", [])
+                if not candidates:
+                    print("[WARN] Gemini fallback returned no candidates")
+                    continue
+
+                parts = candidates[0].get("content", {}).get("parts", [])
+                if not parts:
+                    print("[WARN] Gemini fallback returned no parts")
+                    continue
+
+                raw_text = parts[0].get("text", "").strip()
+                if not raw_text:
+                    print("[WARN] Gemini fallback returned empty text")
+                    continue
+
+                try:
+                    ai_data = extract_json_object(raw_text)
+                    set_last_routing(fallback_routing, "fallback_json", "success")
+                    return format_ai_review_from_json(ai_data)
+                except Exception as parse_error:
+                    print(f"[WARN] Gemini fallback JSON parse failed: {parse_error}")
+                    print(f"[WARN] Raw fallback output: {raw_text[:500]}")
+                    continue
+
+            except Exception as fallback_error:
+                print(f"[WARN] Gemini fallback failed with {fallback_model}: {fallback_error}")
+
+                record_llm_model_usage(
+                    config=config,
+                    model=fallback_model,
+                    mode="fallback_json",
+                    use_grounding=False,
+                    status="exception",
+                    response_status=None,
+                    error_message=str(fallback_error),
+                )
+
+                continue
+
+        config["_last_llm_routing"] = {
+            "mode": "unavailable",
+            "model": "none",
+            "use_grounding": False,
+            "routing_reason": f"all fallback models failed after: {reason}",
+            "quota_reason": "",
+            "ai_source": "unavailable",
+        }
+        return ai_error_fallback
 
     grounding_instruction = ""
     if use_grounding:
@@ -1048,6 +1319,15 @@ Analyze the BTC/USDT situation based on:
 - recovery gap,
 - open orders,
 - risk and mental discipline.
+
+Make the analysis deeper than a simple HOLD explanation.
+Include:
+- market structure,
+- portfolio exposure,
+- open-order ladder implication,
+- recovery pressure,
+- behavioral risk,
+- what would change the next decision.
 
 You may agree or cautiously disagree with the rule-engine signal, but you must NOT override it.
 The final decision remains manual-only and rule-engine guarded.
@@ -1129,7 +1409,7 @@ agree | cautious_agree | disagree_but_do_not_override
 END_REVIEW
 
 Keep each section concise.
-Total response under 250 words.
+Total response under 320 words.
 Do not stop before END_REVIEW.
 
 Data:
@@ -1165,14 +1445,21 @@ Data:
     try:
         response = requests.post(url, json=payload, timeout=45)
 
+        record_llm_model_usage(
+            config=config,
+            model=model,
+            mode=routing.get("mode", "unknown"),
+            use_grounding=use_grounding,
+            status="ok" if response.ok else "http_error",
+            response_status=response.status_code,
+            error_message=response.text if not response.ok else "",
+        )
+
         if not response.ok:
             print(f"[WARN] Gemini error with {model}: {response.status_code} {response.text}")
             return run_fallback_json(f"main request HTTP error {response.status_code}")
 
         data = response.json()
-
-        if use_grounding:
-            record_grounding_usage()
 
         candidates = data.get("candidates", [])
         if not candidates:
@@ -1199,10 +1486,22 @@ Data:
         if not cleaned_text:
             return run_fallback_json("cleaned main HTML output is empty")
 
+        set_last_routing(routing, "main_html", "success")
         return cleaned_text
 
     except Exception as error:
         print(f"[WARN] Gemini failed: {error}")
+
+        record_llm_model_usage(
+            config=config,
+            model=model,
+            mode=routing.get("mode", "unknown"),
+            use_grounding=use_grounding,
+            status="exception",
+            response_status=None,
+            error_message=str(error),
+        )
+
         return run_fallback_json(f"main request exception: {error}")
 
 
@@ -1489,12 +1788,36 @@ def build_message(config, market, portfolio, decision,
 
     ai_text = f"\n\n{ai_explanation}" if ai_explanation else ""
 
-    llm_routing = choose_gemini_model(config, market, portfolio, decision)
+    llm_routing = config.get("_last_llm_routing")
+
+    if not llm_routing:
+        try:
+            llm_routing = choose_gemini_model(config, market, portfolio, decision)
+        except Exception as error:
+            llm_routing = {
+                "mode": "unavailable",
+                "model": "none",
+                "use_grounding": False,
+                "routing_reason": f"routing unavailable: {error}",
+                "quota_reason": "",
+                "ai_source": "unavailable",
+                "daily_limit": 0,
+            }
+
+    usage_state = load_llm_usage_state(config)
+    model_name = llm_routing.get("model", "none")
+    model_entry = usage_state.get("models", {}).get(model_name, {})
+    requests_today = model_entry.get("requests_today", 0)
+    daily_limit = llm_routing.get("daily_limit", "?")
+
     llm_text = (
         f"<b>LLM Routing</b>\n"
-        f"Model: {esc(llm_routing['model'])}\n"
-        f"Grounding: {esc(llm_routing['use_grounding'])}\n"
-        f"Reason: {esc(llm_routing['routing_reason'])}\n\n"
+        f"Mode: {esc(llm_routing.get('mode', 'unknown'))}\n"
+        f"Model: {esc(model_name)}\n"
+        f"AI source: {esc(llm_routing.get('ai_source', 'unknown'))}\n"
+        f"Grounding: {esc(llm_routing.get('use_grounding', False))}\n"
+        f"Reason: {esc(llm_routing.get('routing_reason', ''))}\n"
+        f"Quota: {esc(requests_today)}/{esc(daily_limit)} requests today\n\n"
     )
 
     return (

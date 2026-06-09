@@ -77,22 +77,58 @@ llm:
   enabled: true
   temperature: 0.2
 
-  # Normal deterministic review
-  default_model: "gemini-3.5-flash"
-  default_max_output_tokens: 2000
+  quota_guard:
+    enabled: true
+    state_file: "data/llm_usage_state.json"
+    reserve_requests_per_model: 0
+    rate_limit_cooldown_minutes: 15
 
-  # Deep analysis review
-  deep_model: "gemini-3.5-flash"
-  deep_max_output_tokens: 2500
+  # Hourly deep-first system:
+  # Pada jam normal, bot mencoba deep_primary dulu.
+  # Kalau kuota deep_primary habis, otomatis turun ke deep_secondary.
+  hourly_deep:
+    enabled: true
 
-  # Grounded review
-  # Free tier: pakai 2.5 Flash untuk Google Search grounding.
-  grounding_model: "gemini-2.5-flash"
-  grounding_max_output_tokens: 2500
+  models:
+    deep_primary:
+      model: "gemini-3.5-flash"
+      max_output_tokens: 2800
+      daily_limit: 20
 
-  # Fallback JSON mode
-  fallback_model: "gemini-2.5-flash-lite"
-  fallback_max_output_tokens: 1500
+    deep_secondary:
+      model: "gemini-2.5-flash"
+      max_output_tokens: 3000
+      daily_limit: 20
+
+    grounding:
+      model: "gemini-2.5-flash"
+      max_output_tokens: 2500
+      daily_limit: 20
+
+    fallback:
+      model: "gemini-2.5-flash-lite"
+      max_output_tokens: 1500
+      daily_limit: 20
+
+  # Fallback JSON chain.
+  # Dipakai kalau main model error, quota/rate limit, output kosong,
+  # malformed, atau tidak mengandung END_REVIEW.
+  fallback_models:
+    - model: "gemini-2.5-flash-lite"
+      max_output_tokens: 1500
+      daily_limit: 20
+    - model: "gemini-2.5-flash"
+      max_output_tokens: 1800
+      daily_limit: 20
+
+  grounding:
+    enabled: true
+    use_google_search: true
+    interval_hours: 4
+    max_grounded_runs_per_day: 6
+    use_on_interval: true
+    use_on_high_volatility: true
+    use_on_action_signal: true
 
   deep_review:
     enabled: true
@@ -101,15 +137,6 @@ llm:
     use_pro_on_action_signal: true
     use_pro_on_recovery_risk: true
     recovery_gap_pct_threshold: 10
-
-  grounding:
-    enabled: false
-    use_google_search: false
-    max_grounded_runs_per_day: 4
-    daily_review_utc_hours: []
-    use_on_daily_review: true
-    use_on_high_volatility: true
-    use_on_action_signal: false
 
 recovery:
   initial_capital_usdt: 380
