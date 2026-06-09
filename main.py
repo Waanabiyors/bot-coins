@@ -816,7 +816,7 @@ def record_llm_model_usage(
     else:
         entry["errors_today"] = int(entry.get("errors_today", 0)) + 1
 
-    if response_status == 429:
+    if response_status in [429, 503]:
         cooldown_minutes = int(
             config.get("llm", {})
             .get("quota_guard", {})
