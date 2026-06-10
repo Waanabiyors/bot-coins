@@ -1,8 +1,8 @@
 symbol: BTC/USDT
 
 portfolio:
-  usdt: 270.35080653
-  btc: 0.00065886
+  usdt: 245.95080653
+  btc: 0.00105733
   target_btc_min_pct: 50
   target_btc_max_pct: 75
   max_single_buy_usdt: 60
@@ -59,7 +59,7 @@ manual_open_orders:
       price: 61000
       amount: 0.00040
       allocated_usdt: 24.40
-      status: open
+      status: filled
 
     - side: buy
       type: limit
@@ -67,6 +67,14 @@ manual_open_orders:
       amount: 0.00050
       allocated_usdt: 30.00
       status: open
+
+intrahour_price_check:
+  enabled: true
+  source: "coingecko_market_chart"
+  lookback_minutes: 90
+  touch_tolerance_pct: 0.15
+  force_verify_on_touch: true
+  estimate_portfolio_if_touched: true
 
 safety:
   allow_trading: false

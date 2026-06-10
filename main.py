@@ -225,6 +225,422 @@ def get_daily_klines(symbol, days=30):
     df = pd.DataFrame(rows)
     return df.tail(days).reset_index(drop=True)
 
+# ============================================================
+# Intrahour price and possible order touch detection
+# ============================================================
+
+def get_recent_intrahour_price_window(config):
+    """
+    Fetch recent CoinGecko market chart data to detect whether BTC touched
+    manual open-order levels between hourly bot runs.
+
+    Important:
+    This does NOT confirm Tokocrypto execution.
+    It only detects that market price likely touched the configured order level.
+    """
+    check_cfg = config.get("intrahour_price_check", {})
+
+    if not check_cfg.get("enabled", False):
+        return {
+            "enabled": False,
+            "available": False,
+            "source": "disabled",
+            "message": "Intrahour price check disabled.",
+            "rows": [],
+        }
+
+    source = check_cfg.get("source", "coingecko_market_chart")
+    lookback_minutes = int(check_cfg.get("lookback_minutes", 90))
+
+    if source != "coingecko_market_chart":
+        return {
+            "enabled": True,
+            "available": False,
+            "source": source,
+            "message": f"Unsupported intrahour source: {source}",
+            "rows": [],
+        }
+
+    url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart"
+    params = {
+        "vs_currency": "usd",
+        "days": 1,
+    }
+
+    try:
+        response = requests.get(url, params=params, timeout=25)
+
+        if not response.ok:
+            return {
+                "enabled": True,
+                "available": False,
+                "source": source,
+                "message": f"CoinGecko intrahour market chart failed: {response.status_code} {response.text[:300]}",
+                "rows": [],
+            }
+
+        data = response.json()
+        prices = data.get("prices", [])
+
+        if not prices:
+            return {
+                "enabled": True,
+                "available": False,
+                "source": source,
+                "message": "CoinGecko intrahour market chart returned no prices.",
+                "rows": [],
+            }
+
+        now_utc = datetime.now(timezone.utc)
+        cutoff_utc = now_utc - pd.Timedelta(minutes=lookback_minutes)
+
+        rows = []
+        for timestamp_ms, price in prices:
+            timestamp_utc = pd.to_datetime(timestamp_ms, unit="ms", utc=True)
+
+            if timestamp_utc < cutoff_utc:
+                continue
+
+            rows.append({
+                "time_utc": timestamp_utc,
+                "price": float(price),
+            })
+
+        if not rows:
+            return {
+                "enabled": True,
+                "available": False,
+                "source": source,
+                "message": "No CoinGecko prices inside configured lookback window.",
+                "rows": [],
+            }
+
+        df = pd.DataFrame(rows)
+
+        return {
+            "enabled": True,
+            "available": True,
+            "source": source,
+            "lookback_minutes": lookback_minutes,
+            "window_start_utc": df["time_utc"].min().isoformat(),
+            "window_end_utc": df["time_utc"].max().isoformat(),
+            "window_low": float(df["price"].min()),
+            "window_high": float(df["price"].max()),
+            "last_price_in_window": float(df["price"].iloc[-1]),
+            "rows": rows,
+        }
+
+    except Exception as error:
+        return {
+            "enabled": True,
+            "available": False,
+            "source": source,
+            "message": f"CoinGecko intrahour price check failed: {error}",
+            "rows": [],
+        }
+
+
+def detect_intrahour_order_events(config, intrahour_window, current_price):
+    """
+    Detect whether recent CoinGecko prices touched configured manual open-order levels.
+
+    This returns POSSIBLE fills, not confirmed fills.
+    True fill confirmation requires Tokocrypto private order/trade data.
+    """
+    check_cfg = config.get("intrahour_price_check", {})
+    tolerance_pct = float(check_cfg.get("touch_tolerance_pct", 0.15))
+
+    result = {
+        "enabled": bool(check_cfg.get("enabled", False)),
+        "available": bool(intrahour_window.get("available", False)),
+        "source": intrahour_window.get("source", "unknown"),
+        "lookback_minutes": intrahour_window.get("lookback_minutes"),
+        "window_start_utc": intrahour_window.get("window_start_utc"),
+        "window_end_utc": intrahour_window.get("window_end_utc"),
+        "window_low": intrahour_window.get("window_low"),
+        "window_high": intrahour_window.get("window_high"),
+        "last_price_in_window": intrahour_window.get("last_price_in_window"),
+        "message": intrahour_window.get("message", ""),
+        "events": [],
+        "has_possible_fill": False,
+        "estimated_portfolio_if_touched": None,
+    }
+
+    if not result["enabled"] or not result["available"]:
+        return result
+
+    rows = intrahour_window.get("rows", [])
+    if not rows:
+        result["available"] = False
+        result["message"] = "Intrahour window has no rows."
+        return result
+
+    manual_orders_cfg = config.get("manual_open_orders", {})
+    if not manual_orders_cfg.get("enabled", False):
+        return result
+
+    open_orders = [
+        order for order in manual_orders_cfg.get("orders", [])
+        if order.get("status") == "open"
+    ]
+
+    touched_orders = []
+
+    for order in open_orders:
+        side = str(order.get("side", "")).lower()
+        price = float(order.get("price", 0) or 0)
+        amount = float(order.get("amount", 0) or 0)
+        allocated_usdt = float(order.get("allocated_usdt", 0) or 0)
+
+        if price <= 0:
+            continue
+
+        if allocated_usdt <= 0 and amount > 0:
+            allocated_usdt = price * amount
+
+        tolerance = price * (tolerance_pct / 100)
+
+        touched_rows = []
+
+        for row in rows:
+            observed_price = float(row["price"])
+
+            if side == "buy":
+                touched = observed_price <= price + tolerance
+            elif side == "sell":
+                touched = observed_price >= price - tolerance
+            else:
+                touched = False
+
+            if touched:
+                touched_rows.append(row)
+
+        if not touched_rows:
+            continue
+
+        first_touch = touched_rows[0]
+
+        if side == "buy":
+            best_price = min(float(row["price"]) for row in touched_rows)
+        else:
+            best_price = max(float(row["price"]) for row in touched_rows)
+
+        event = {
+            "side": side,
+            "type": order.get("type"),
+            "order_price": price,
+            "amount": amount,
+            "allocated_usdt": allocated_usdt,
+            "status": "possible_fill_price_touched",
+            "first_touch_utc": first_touch["time_utc"].isoformat(),
+            "best_price_in_window": best_price,
+            "note": (
+                "CoinGecko recent price touched this manual open-order level. "
+                "This is NOT confirmed Tokocrypto execution. Verify Tokocrypto and update config_git.yaml."
+            ),
+        }
+
+        result["events"].append(event)
+        touched_orders.append(event)
+        result["has_possible_fill"] = True
+
+    if check_cfg.get("estimate_portfolio_if_touched", True):
+        result["estimated_portfolio_if_touched"] = estimate_portfolio_if_touched_orders_filled(
+            config=config,
+            touched_orders=touched_orders,
+            current_price=current_price,
+        )
+
+    return result
+
+
+def estimate_portfolio_if_touched_orders_filled(config, touched_orders, current_price):
+    """
+    Estimate portfolio state if touched manual buy orders were actually filled.
+
+    This is only an estimate.
+    It does not account for exact Tokocrypto fills, partial fills, or fees.
+    """
+    portfolio_cfg = config.get("portfolio", {})
+    manual_orders_cfg = config.get("manual_open_orders", {})
+
+    base_btc = float(portfolio_cfg.get("btc", 0) or 0)
+    base_usdt_total = float(portfolio_cfg.get("usdt", 0) or 0)
+
+    touched_buy_orders = [
+        event for event in touched_orders
+        if event.get("side") == "buy"
+    ]
+
+    touched_allocated_usdt = sum(
+        float(event.get("allocated_usdt", 0) or 0)
+        for event in touched_buy_orders
+    )
+
+    touched_btc_amount = sum(
+        float(event.get("amount", 0) or 0)
+        for event in touched_buy_orders
+    )
+
+    touched_prices = [
+        float(event.get("order_price", 0) or 0)
+        for event in touched_buy_orders
+        if float(event.get("order_price", 0) or 0) > 0
+    ]
+
+    remaining_open_order_usdt = 0.0
+
+    touched_order_keys = {
+        (
+            str(event.get("side")),
+            float(event.get("order_price", 0) or 0),
+            float(event.get("amount", 0) or 0),
+        )
+        for event in touched_buy_orders
+    }
+
+    if manual_orders_cfg.get("enabled", False):
+        for order in manual_orders_cfg.get("orders", []):
+            if order.get("status") != "open":
+                continue
+
+            side = str(order.get("side", "")).lower()
+            price = float(order.get("price", 0) or 0)
+            amount = float(order.get("amount", 0) or 0)
+            allocated_usdt = float(order.get("allocated_usdt", 0) or 0)
+
+            order_key = (side, price, amount)
+
+            if order_key in touched_order_keys:
+                continue
+
+            if side == "buy":
+                if allocated_usdt <= 0 and amount > 0 and price > 0:
+                    allocated_usdt = price * amount
+                remaining_open_order_usdt += allocated_usdt
+
+    estimated_btc = base_btc + touched_btc_amount
+    estimated_usdt_total = max(base_usdt_total - touched_allocated_usdt, 0)
+    estimated_usdt_used = remaining_open_order_usdt
+    estimated_usdt_free = max(estimated_usdt_total - estimated_usdt_used, 0)
+
+    estimated_btc_value = estimated_btc * current_price
+    estimated_total_value = estimated_usdt_total + estimated_btc_value
+    estimated_btc_pct = (
+        (estimated_btc_value / estimated_total_value) * 100
+        if estimated_total_value > 0 else 0
+    )
+    estimated_usdt_pct = 100 - estimated_btc_pct if estimated_total_value > 0 else 0
+
+    avg_touched_price = (
+        touched_allocated_usdt / touched_btc_amount
+        if touched_btc_amount > 0 else 0
+    )
+
+    return {
+        "not_confirmed": True,
+        "must_verify_tokocrypto": True,
+        "touched_order_count": len(touched_buy_orders),
+        "touched_prices": touched_prices,
+        "touched_btc_amount": touched_btc_amount,
+        "touched_allocated_usdt": touched_allocated_usdt,
+        "avg_touched_price": avg_touched_price,
+        "base_btc": base_btc,
+        "base_usdt_total": base_usdt_total,
+        "estimated_btc": estimated_btc,
+        "estimated_usdt_total": estimated_usdt_total,
+        "estimated_usdt_free": estimated_usdt_free,
+        "estimated_usdt_used_open_orders": estimated_usdt_used,
+        "estimated_btc_value": estimated_btc_value,
+        "estimated_total_value": estimated_total_value,
+        "estimated_btc_pct": estimated_btc_pct,
+        "estimated_usdt_pct": estimated_usdt_pct,
+    }
+
+
+def adjust_decision_for_intrahour_order_events(config, decision, intrahour_order_events):
+    """
+    If price touched one or more manual open-order levels, force a verification-first HOLD.
+    This prevents the bot from giving misleading recommendations while config may be stale.
+    """
+    check_cfg = config.get("intrahour_price_check", {})
+
+    if not check_cfg.get("force_verify_on_touch", True):
+        return decision
+
+    if not intrahour_order_events.get("has_possible_fill", False):
+        return decision
+
+    touched_levels = [
+        f"{event['side']} @{event['order_price']:.0f}"
+        for event in intrahour_order_events.get("events", [])
+    ]
+
+    touched_text = ", ".join(touched_levels)
+
+    return {
+        "signal": "HOLD / VERIFY POSSIBLE FILLED ORDER",
+        "action_usdt": 0,
+        "reason": (
+            f"Harga CoinGecko recent window menyentuh level order manual ({touched_text}). "
+            f"Bot belum bisa memastikan eksekusi tanpa private Tokocrypto API. "
+            f"Verifikasi order di Tokocrypto dan update config_git.yaml sebelum keputusan baru."
+        ),
+    }
+
+
+def format_intrahour_order_events(intrahour_order_events):
+    if not intrahour_order_events.get("enabled", False):
+        return "Recent price check: disabled"
+
+    if not intrahour_order_events.get("available", False):
+        message = intrahour_order_events.get("message", "unavailable")
+        return f"Recent price check unavailable: {message}"
+
+    lines = [
+        (
+            f"Recent price check: last {intrahour_order_events.get('lookback_minutes')} min "
+            f"from {intrahour_order_events.get('source')}"
+        ),
+        (
+            f"Window range: "
+            f"${intrahour_order_events.get('window_low'):,.0f} - "
+            f"${intrahour_order_events.get('window_high'):,.0f}"
+        ),
+    ]
+
+    events = intrahour_order_events.get("events", [])
+
+    if not events:
+        lines.append("Order touch: no configured open-order level touched in this window.")
+        return "\n".join(lines)
+
+    lines.append("Order touch: POSSIBLE FILL DETECTED — NOT CONFIRMED")
+
+    for event in events:
+        lines.append(
+            f"- {event['side']} limit @{event['order_price']:,.0f} touched; "
+            f"best observed price ${event['best_price_in_window']:,.0f}; "
+            f"first touch {event['first_touch_utc']}"
+        )
+
+    estimate = intrahour_order_events.get("estimated_portfolio_if_touched")
+
+    if estimate:
+        lines.append("")
+        lines.append("Estimated portfolio if touched buy orders were filled:")
+        lines.append(f"- BTC estimate: {estimate['estimated_btc']:.8f}")
+        lines.append(f"- USDT total estimate: {estimate['estimated_usdt_total']:.2f}")
+        lines.append(f"- USDT free estimate: {estimate['estimated_usdt_free']:.2f}")
+        lines.append(f"- USDT still in open orders estimate: {estimate['estimated_usdt_used_open_orders']:.2f}")
+        lines.append(f"- BTC allocation estimate: {estimate['estimated_btc_pct']:.1f}%")
+        lines.append(f"- Total value estimate: {estimate['estimated_total_value']:.2f} USDT")
+
+    lines.append("")
+    lines.append("Status: NOT CONFIRMED. Verify Tokocrypto, then update config_git.yaml.")
+
+    return "\n".join(lines)
+
 
 # ============================================================
 # Tokocrypto read-only private data
@@ -1026,7 +1442,7 @@ def choose_gemini_model(config, market, portfolio, decision):
     raise RuntimeError("No available Gemini model quota left for this run.")
 
 
-def build_rule_summary_for_llm(config, market, portfolio, decision, open_orders):
+def build_rule_summary_for_llm(config, market, portfolio, decision, open_orders, intrahour_order_events=None):
     return {
         "market": {
             "price": market["price"],
@@ -1051,10 +1467,11 @@ def build_rule_summary_for_llm(config, market, portfolio, decision, open_orders)
         },
         "decision": decision,
         "open_orders": open_orders[:5],
+        "intrahour_order_events": intrahour_order_events or {},
     }
 
 
-def generate_gemini_explanation(config, market, portfolio, decision, open_orders):
+def generate_gemini_explanation(config, market, portfolio, decision, open_orders, intrahour_order_events=None):
     llm_cfg = config.get("llm", {})
     if not llm_cfg.get("enabled", False):
         return ""
@@ -1115,7 +1532,7 @@ def generate_gemini_explanation(config, market, portfolio, decision, open_orders
 
     temperature = float(llm_cfg.get("temperature", 0.2))
 
-    context = build_rule_summary_for_llm(config, market, portfolio, decision, open_orders)
+    context = build_rule_summary_for_llm(config, market, portfolio, decision, open_orders, intrahour_order_events=intrahour_order_events,)
 
     def set_last_routing(base_routing, ai_source, request_status=""):
         stored = dict(base_routing)
@@ -1182,6 +1599,8 @@ def generate_gemini_explanation(config, market, portfolio, decision, open_orders
                                     "You may agree or cautiously disagree with the rule-engine signal, but do not override it. "
                                     "If open orders are active, do not recommend extra manual BTC buy orders. "
                                     "If BTC allocation is below target but open orders are active, usually use cautious_agree. "
+                                    "If intrahour_order_events indicates possible_fill_price_touched, do not claim confirmed fill; "
+                                    "tell the user to verify Tokocrypto and update config before any new manual decision. "
                                     "Use this JSON schema exactly: "
                                     "{"
                                     "\"agreement_with_rule\":\"agree | cautious_agree | disagree_but_do_not_override\","
@@ -1363,6 +1782,14 @@ Do not use JSON.
 Do not use code fences.
 Do not write any intro sentence.
 Start exactly with <b>AI Analyst Review</b>.
+
+If intrahour_order_events indicates possible_fill_price_touched:
+- Do NOT claim the order is confirmed filled.
+- Say that CoinGecko recent price window touched the manual order level.
+- Mention the estimated portfolio only as an estimate, not source of truth.
+- Tell the user to verify Tokocrypto execution status.
+- Treat the config as potentially stale until the user updates portfolio and manual_open_orders.
+- Recommended action must remain HOLD / VERIFY, not a new buy.
 
 Use exactly these sections:
 <b>AI Analyst Review</b>
@@ -1765,9 +2192,11 @@ def format_open_orders(open_orders):
 
 
 def build_message(config, market, portfolio, decision,
-                  open_orders=None, ai_explanation="", open_orders_error=""):
+                  open_orders=None, ai_explanation="", open_orders_error="",
+                  intrahour_order_events=None):
     repo_reminder = build_repo_reminder(config)
     open_orders_text = format_open_orders(open_orders or [])
+    intrahour_events_text = format_intrahour_order_events(intrahour_order_events or {})
 
     recovery = calculate_recovery_status(config, portfolio)
     recovery_text = recovery.get("message", "")
@@ -1854,6 +2283,9 @@ def build_message(config, market, portfolio, decision,
         f"{esc(open_orders_text)}\n"
         f"{open_orders_error_text}\n"
 
+        f"<b>Recent Price Check</b>\n"
+        f"{esc(intrahour_events_text)}\n\n"
+
         f"<b>Decision</b>\n"
         f"Signal: <b>{esc(decision['signal'])}</b>\n"
         f"Recommended action: <b>{decision['action_usdt']:.2f} USDT</b>\n"
@@ -1915,7 +2347,21 @@ def main():
 
     market = calculate_market_context(ticker, daily)
     portfolio = calculate_portfolio(config, market["price"])
+
+    intrahour_window = get_recent_intrahour_price_window(config)
+    intrahour_order_events = detect_intrahour_order_events(
+        config=config,
+        intrahour_window=intrahour_window,
+        current_price=market["price"],
+    )
+
     decision = decide_signal(config, market, portfolio)
+    decision = adjust_decision_for_intrahour_order_events(
+        config=config,
+        decision=decision,
+        intrahour_order_events=intrahour_order_events,
+    )
+
     append_signal_log(market, portfolio, decision)
 
     open_orders = []
@@ -1943,6 +2389,7 @@ def main():
         portfolio=portfolio,
         decision=decision,
         open_orders=open_orders,
+        intrahour_order_events=intrahour_order_events,
     )
 
     message = build_message(
@@ -1953,6 +2400,7 @@ def main():
         open_orders=open_orders,
         ai_explanation=ai_explanation,
         open_orders_error=open_orders_error,
+        intrahour_order_events=intrahour_order_events,
     )
 
     send_telegram(message)
