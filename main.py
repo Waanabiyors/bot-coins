@@ -1,6 +1,7 @@
 import os
 import json
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 import html
 import ccxt
 import pandas as pd
@@ -1049,6 +1050,16 @@ def build_repo_reminder(config):
 
 LLM_USAGE_STATE_FILE = "data/llm_usage_state.json"
 
+GEMINI_QUOTA_TIMEZONE = "America/Los_Angeles"
+
+
+def get_gemini_quota_date():
+    """
+    Gemini API RPD quota resets at midnight Pacific Time.
+    Use America/Los_Angeles so DST is handled automatically.
+    """
+    pacific_now = datetime.now(ZoneInfo(GEMINI_QUOTA_TIMEZONE))
+    return pacific_now.date().isoformat()
 
 def get_llm_state_file(config=None):
     if config is None:
@@ -1063,11 +1074,11 @@ def load_llm_usage_state(config=None):
     state_file = get_llm_state_file(config)
     os.makedirs(os.path.dirname(state_file) or ".", exist_ok=True)
 
-    today = datetime.now(timezone.utc).date().isoformat()
+    quota_date = get_gemini_quota_date()
 
     if not os.path.exists(state_file):
         return {
-            "date_utc": today,
+            "quota_date_pacific": quota_date,
             "grounded_runs_today": 0,
             "last_grounding_bucket_utc": "",
             "models": {},
@@ -1079,14 +1090,20 @@ def load_llm_usage_state(config=None):
     except Exception:
         state = {}
 
-    if state.get("date_utc") != today:
+    # Backward compatibility:
+    # Old state used date_utc. New state uses quota_date_pacific
+    # because Gemini RPD resets at midnight Pacific Time.
+    saved_quota_date = state.get("quota_date_pacific")
+
+    if saved_quota_date != quota_date:
         return {
-            "date_utc": today,
+            "quota_date_pacific": quota_date,
             "grounded_runs_today": 0,
             "last_grounding_bucket_utc": "",
             "models": {},
         }
 
+    state.setdefault("quota_date_pacific", quota_date)
     state.setdefault("grounded_runs_today", 0)
     state.setdefault("last_grounding_bucket_utc", "")
     state.setdefault("models", {})
