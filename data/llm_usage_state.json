@@ -4,32 +4,32 @@
   "last_grounding_bucket_utc": "2026-06-11T16:00Z",
   "models": {
     "gemini-3.5-flash": {
-      "requests_today": 7,
+      "requests_today": 8,
       "success_today": 2,
-      "errors_today": 5,
-      "last_used_utc": "2026-06-11T15:01:00.569201+00:00",
+      "errors_today": 6,
+      "last_used_utc": "2026-06-11T17:01:15.727893+00:00",
       "last_status": "http_error",
       "last_mode": "deep_primary",
       "last_response_status": 503,
       "last_error": "{\n  \"error\": {\n    \"code\": 503,\n    \"message\": \"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\n    \"status\": \"UNAVAILABLE\"\n  }\n}\n",
-      "cooldown_until_utc": "2026-06-11T15:16:00.569213+00:00"
+      "cooldown_until_utc": "2026-06-11T17:16:15.727904+00:00"
     },
     "gemini-2.5-flash": {
-      "requests_today": 8,
+      "requests_today": 9,
       "success_today": 5,
-      "errors_today": 3,
-      "last_used_utc": "2026-06-11T16:01:12.673989+00:00",
-      "last_status": "ok",
-      "last_mode": "grounding",
-      "last_response_status": 200,
+      "errors_today": 4,
+      "last_used_utc": "2026-06-11T17:01:16.991521+00:00",
+      "last_status": "http_error",
+      "last_mode": "fallback_json",
+      "last_response_status": 503,
       "last_error": "{\n  \"error\": {\n    \"code\": 503,\n    \"message\": \"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\n    \"status\": \"UNAVAILABLE\"\n  }\n}\n",
-      "cooldown_until_utc": ""
+      "cooldown_until_utc": "2026-06-11T17:16:16.991532+00:00"
     },
     "gemini-2.5-flash-lite": {
-      "requests_today": 3,
-      "success_today": 3,
+      "requests_today": 4,
+      "success_today": 4,
       "errors_today": 0,
-      "last_used_utc": "2026-06-11T13:01:26.237870+00:00",
+      "last_used_utc": "2026-06-11T17:01:19.652058+00:00",
       "last_status": "ok",
       "last_mode": "fallback_json",
       "last_response_status": 200,
