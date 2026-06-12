@@ -1112,6 +1112,10 @@ def build_gemini_candidate_actions(config, market, portfolio, open_orders, intra
     """
     Build the exact action menu Gemini is allowed to choose from.
     Gemini must not invent actions outside this list.
+
+    Debug note:
+    BUY_GATE prints are intentionally only written to GitHub Actions logs.
+    They do not affect Telegram message or trading decision.
     """
     decision_cfg = config.get("gemini_decision", {})
 
@@ -1126,7 +1130,21 @@ def build_gemini_candidate_actions(config, market, portfolio, open_orders, intra
         }
     ]
 
+    print(
+        "[BUY_GATE] start | "
+        f"enabled={decision_cfg.get('enabled', False)} | "
+        f"allowed_to_recommend_buy={decision_cfg.get('allowed_to_recommend_buy', False)} | "
+        f"price={market.get('price')} | "
+        f"ma7={market.get('ma_7')} | "
+        f"ma20={market.get('ma_20')} | "
+        f"change_24h={market.get('change_24h')} | "
+        f"btc_pct={portfolio.get('btc_pct')} | "
+        f"usdt_free={portfolio.get('usdt_free')}",
+        flush=True,
+    )
+
     if not decision_cfg.get("enabled", False):
+        print("[BUY_GATE] blocked: gemini_decision disabled", flush=True)
         return actions
 
     if (
@@ -1134,6 +1152,8 @@ def build_gemini_candidate_actions(config, market, portfolio, open_orders, intra
         and intrahour_order_events
         and intrahour_order_events.get("has_possible_fill", False)
     ):
+        print("[BUY_GATE] blocked: possible fill detected", flush=True)
+
         actions.append({
             "key": "HOLD_VERIFY_POSSIBLE_FILL",
             "type": "hold",
@@ -1145,6 +1165,13 @@ def build_gemini_candidate_actions(config, market, portfolio, open_orders, intra
         return actions
 
     if portfolio["btc_pct"] >= config["portfolio"]["target_btc_max_pct"]:
+        print(
+            "[BUY_GATE] note: btc_pct already above target max | "
+            f"btc_pct={portfolio['btc_pct']:.2f} | "
+            f"target_max={config['portfolio']['target_btc_max_pct']}",
+            flush=True,
+        )
+
         actions.append({
             "key": "HOLD_TOO_MUCH_BTC",
             "type": "hold",
@@ -1155,6 +1182,13 @@ def build_gemini_candidate_actions(config, market, portfolio, open_orders, intra
         })
 
     has_open_orders = bool(open_orders)
+
+    print(
+        "[BUY_GATE] open orders | "
+        f"has_open_orders={has_open_orders} | "
+        f"open_order_count={len(open_orders or [])}",
+        flush=True,
+    )
 
     if has_open_orders:
         actions.append({
@@ -1183,17 +1217,31 @@ def build_gemini_candidate_actions(config, market, portfolio, open_orders, intra
     actions.extend(sell_actions)
 
     if not decision_cfg.get("allowed_to_recommend_buy", False):
+        print("[BUY_GATE] blocked: allowed_to_recommend_buy=false", flush=True)
         return actions
 
     if decision_cfg.get("block_buy_if_panic_or_dump", True):
         if market["change_24h"] <= config["risk"]["dump_24h_pct"]:
+            print(
+                "[BUY_GATE] blocked: daily dump / panic guard | "
+                f"change_24h={market['change_24h']:.2f} | "
+                f"dump_threshold={config['risk']['dump_24h_pct']}",
+                flush=True,
+            )
             return actions
 
     if decision_cfg.get("require_btc_below_target_min", True):
         if portfolio["btc_pct"] >= config["portfolio"]["target_btc_min_pct"]:
+            print(
+                "[BUY_GATE] blocked: btc_pct already >= target min | "
+                f"btc_pct={portfolio['btc_pct']:.2f} | "
+                f"target_min={config['portfolio']['target_btc_min_pct']}",
+                flush=True,
+            )
             return actions
 
     if has_open_orders and not decision_cfg.get("allow_buy_with_open_orders", False):
+        print("[BUY_GATE] blocked: open orders active and allow_buy_with_open_orders=false", flush=True)
         return actions
 
     exposure_tier = get_gemini_exposure_tier(
@@ -1202,10 +1250,26 @@ def build_gemini_candidate_actions(config, market, portfolio, open_orders, intra
         has_open_orders=has_open_orders,
     )
 
+    print(
+        "[BUY_GATE] exposure tier | "
+        f"tier={exposure_tier.get('name') if exposure_tier else None} | "
+        f"can_buy={exposure_tier.get('can_buy') if exposure_tier else None} | "
+        f"reason={exposure_tier.get('reason') if exposure_tier else None}",
+        flush=True,
+    )
+
     if not exposure_tier:
+        print("[BUY_GATE] blocked: no exposure tier selected", flush=True)
         return actions
 
     if not exposure_tier.get("can_buy", False):
+        print(
+            "[BUY_GATE] blocked: exposure tier cannot buy | "
+            f"tier={exposure_tier.get('name')} | "
+            f"reason={exposure_tier.get('reason')}",
+            flush=True,
+        )
+
         actions.append({
             "key": "HOLD_OVERHEATED_NO_FOMO",
             "type": "hold",
@@ -1222,11 +1286,29 @@ def build_gemini_candidate_actions(config, market, portfolio, open_orders, intra
         has_open_orders=has_open_orders,
     )
 
+    print(
+        "[BUY_GATE] tier max buy | "
+        f"tier={exposure_tier.get('name')} | "
+        f"max_buy={max_buy}",
+        flush=True,
+    )
+
     if max_buy <= 0:
+        print("[BUY_GATE] blocked: max_buy <= 0", flush=True)
         return actions
 
     min_free = float(decision_cfg.get("min_usdt_free_after_buy", 150))
-    if portfolio["usdt_free"] - max_buy < min_free:
+    usdt_free_after_buy = portfolio["usdt_free"] - max_buy
+
+    print(
+        "[BUY_GATE] reserve check | "
+        f"usdt_free_after_buy={usdt_free_after_buy:.2f} | "
+        f"min_free={min_free:.2f}",
+        flush=True,
+    )
+
+    if usdt_free_after_buy < min_free:
+        print("[BUY_GATE] blocked: reserve would be violated", flush=True)
         return actions
 
     tier_settings = exposure_tier.get("settings", {})
@@ -1248,10 +1330,22 @@ def build_gemini_candidate_actions(config, market, portfolio, open_orders, intra
     max_downside_pct = float(tier_settings.get("max_downside_planned_btc_pct", 55))
     tier_min_confidence = int(tier_settings.get("min_confidence_to_buy", decision_cfg.get("min_confidence_to_buy", 80)))
 
+    print(
+        "[BUY_GATE] exposure check | "
+        f"upside_pct={upside_pct:.2f} | "
+        f"max_upside_pct={max_upside_pct:.2f} | "
+        f"downside_planned_pct={downside_planned_pct:.2f} | "
+        f"max_downside_pct={max_downside_pct:.2f} | "
+        f"tier_min_confidence={tier_min_confidence}",
+        flush=True,
+    )
+
     if upside_pct > max_upside_pct:
+        print("[BUY_GATE] blocked: upside exposure cap exceeded", flush=True)
         return actions
 
     if downside_planned_pct > max_downside_pct:
+        print("[BUY_GATE] blocked: downside planned exposure cap exceeded", flush=True)
         return actions
 
     actions.append({
@@ -1273,6 +1367,15 @@ def build_gemini_candidate_actions(config, market, portfolio, open_orders, intra
             f"Downside planned BTC allocation if open orders fill: {downside_planned_pct:.1f}% / cap {max_downside_pct:.1f}%."
         ),
     })
+
+    print(
+        "[BUY_GATE] allowed: BUY_SMALL_CONFIRMATION_WITH_LADDER added | "
+        f"max_buy={max_buy:.2f} | "
+        f"tier={exposure_tier.get('name')} | "
+        f"upside_pct={upside_pct:.2f} | "
+        f"downside_planned_pct={downside_planned_pct:.2f}",
+        flush=True,
+    )
 
     return actions
 
