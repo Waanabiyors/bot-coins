@@ -150,3 +150,32 @@ recovery:
   initial_capital_usdt: 380
   target_months: 3
   target_mode: break_even_first
+
+gemini_decision:
+  enabled: true
+
+  # Awal-awal sebaiknya false dulu untuk test.
+  # Setelah hasilnya masuk akal, ubah ke true.
+  affect_final_decision: false
+
+  allowed_to_recommend_buy: true
+  allow_buy_with_open_orders: true
+
+  max_buy_usdt_with_open_orders: 25
+  max_buy_usdt_without_open_orders: 40
+
+  min_confidence_to_buy: 70
+  min_usdt_free_after_buy: 150
+
+  max_total_planned_btc_pct: 55
+  require_btc_below_target_min: true
+
+  block_buy_if_possible_fill_detected: true
+  block_buy_if_panic_or_dump: true
+  block_buy_if_24h_pump_above_pct: 4
+
+  bullish_confirmation:
+    require_price_above_ma7: true
+    require_price_above_ma20: true
+    confirmation_above_ma20_pct: 1.5
+    allow_if_price_above_ma7_but_below_ma20: false

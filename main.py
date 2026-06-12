@@ -642,6 +642,371 @@ def format_intrahour_order_events(intrahour_order_events):
 
     return "\n".join(lines)
 
+# ============================================================
+# Gemini-assisted decision guard
+# ============================================================
+
+def calculate_planned_btc_exposure_pct(config, portfolio, market_price, extra_buy_usdt=0):
+    """
+    Planned BTC exposure:
+    current BTC + BTC from still-open manual buy orders + optional extra buy.
+    This prevents Gemini from recommending upside buys that make total planned exposure too aggressive.
+    """
+    manual_orders_cfg = config.get("manual_open_orders", {})
+    open_order_btc = 0.0
+
+    if manual_orders_cfg.get("enabled", False):
+        for order in manual_orders_cfg.get("orders", []):
+            if order.get("status") != "open":
+                continue
+
+            side = str(order.get("side", "")).lower()
+            if side != "buy":
+                continue
+
+            amount = float(order.get("amount", 0) or 0)
+            open_order_btc += amount
+
+    extra_btc = 0.0
+    if market_price > 0 and extra_buy_usdt > 0:
+        extra_btc = extra_buy_usdt / market_price
+
+    planned_btc = float(portfolio.get("btc", 0) or 0) + open_order_btc + extra_btc
+    planned_btc_value = planned_btc * market_price
+
+    total_value = float(portfolio.get("total_value", 0) or 0)
+    if total_value <= 0:
+        return 0.0
+
+    return planned_btc_value / total_value * 100
+
+
+def is_bullish_confirmation_for_gemini_decision(config, market):
+    """
+    Strict bullish confirmation gate before Gemini is even allowed to choose upside buy.
+    This is intentionally stricter than normal commentary.
+    """
+    decision_cfg = config.get("gemini_decision", {})
+    bullish_cfg = decision_cfg.get("bullish_confirmation", {})
+
+    price = float(market.get("price", 0) or 0)
+    ma7 = float(market.get("ma_7", 0) or 0)
+    ma20 = float(market.get("ma_20", 0) or 0)
+
+    if price <= 0 or ma7 <= 0 or ma20 <= 0:
+        return False
+
+    if bullish_cfg.get("require_price_above_ma7", True):
+        if price <= ma7:
+            return False
+
+    if bullish_cfg.get("require_price_above_ma20", True):
+        confirmation_pct = float(bullish_cfg.get("confirmation_above_ma20_pct", 1.5))
+        required_price = ma20 * (1 + confirmation_pct / 100)
+
+        if price <= required_price:
+            if bullish_cfg.get("allow_if_price_above_ma7_but_below_ma20", False):
+                return price > ma7
+            return False
+
+    return True
+
+
+def build_gemini_candidate_actions(config, market, portfolio, open_orders, intrahour_order_events):
+    """
+    Build the exact action menu Gemini is allowed to choose from.
+    Gemini must not invent actions outside this list.
+    """
+    decision_cfg = config.get("gemini_decision", {})
+
+    actions = [
+        {
+            "key": "HOLD",
+            "signal": "HOLD",
+            "max_buy_usdt": 0,
+            "reason": "Default safe action.",
+        }
+    ]
+
+    if not decision_cfg.get("enabled", False):
+        return actions
+
+    if (
+        decision_cfg.get("block_buy_if_possible_fill_detected", True)
+        and intrahour_order_events
+        and intrahour_order_events.get("has_possible_fill", False)
+    ):
+        actions.append({
+            "key": "HOLD_VERIFY_POSSIBLE_FILL",
+            "signal": "HOLD / VERIFY POSSIBLE FILLED ORDER",
+            "max_buy_usdt": 0,
+            "reason": "Possible order touch detected. Verify Tokocrypto before any new decision.",
+        })
+        return actions
+
+    if portfolio["btc_pct"] >= config["portfolio"]["target_btc_max_pct"]:
+        actions.append({
+            "key": "HOLD_TOO_MUCH_BTC",
+            "signal": "HOLD / TOO MUCH BTC",
+            "max_buy_usdt": 0,
+            "reason": "BTC allocation is already above target max.",
+        })
+        return actions
+
+    has_open_orders = bool(open_orders)
+
+    if has_open_orders:
+        actions.append({
+            "key": "HOLD_OPEN_ORDERS_ACTIVE",
+            "signal": "HOLD / OPEN ORDERS ACTIVE",
+            "max_buy_usdt": 0,
+            "reason": "Open buy orders are already active. Avoid accidental double entry unless bullish confirmation is strong.",
+        })
+
+        actions.append({
+            "key": "HOLD_REVIEW_LADDER",
+            "signal": "HOLD / REVIEW LADDER",
+            "max_buy_usdt": 0,
+            "reason": "BTC may be improving, but existing downside ladder should be reviewed before adding exposure.",
+        })
+
+    if not decision_cfg.get("allowed_to_recommend_buy", False):
+        return actions
+
+    if decision_cfg.get("block_buy_if_panic_or_dump", True):
+        if market["change_24h"] <= config["risk"]["dump_24h_pct"]:
+            return actions
+
+    pump_block_pct = float(decision_cfg.get("block_buy_if_24h_pump_above_pct", 4))
+    if market["change_24h"] >= pump_block_pct:
+        return actions
+
+    bullish_ok = is_bullish_confirmation_for_gemini_decision(config, market)
+    if not bullish_ok:
+        return actions
+
+    if has_open_orders and not decision_cfg.get("allow_buy_with_open_orders", False):
+        return actions
+
+    if decision_cfg.get("require_btc_below_target_min", True):
+        if portfolio["btc_pct"] >= config["portfolio"]["target_btc_min_pct"]:
+            return actions
+
+    max_buy = (
+        float(decision_cfg.get("max_buy_usdt_with_open_orders", 25))
+        if has_open_orders
+        else float(decision_cfg.get("max_buy_usdt_without_open_orders", 40))
+    )
+
+    min_free = float(decision_cfg.get("min_usdt_free_after_buy", 150))
+    if portfolio["usdt_free"] - max_buy < min_free:
+        return actions
+
+    planned_pct = calculate_planned_btc_exposure_pct(
+        config=config,
+        portfolio=portfolio,
+        market_price=market["price"],
+        extra_buy_usdt=max_buy,
+    )
+
+    max_planned_pct = float(decision_cfg.get("max_total_planned_btc_pct", 55))
+
+    if planned_pct <= max_planned_pct:
+        actions.append({
+            "key": "BUY_SMALL_CONFIRMATION_WITH_LADDER",
+            "signal": "BUY SMALL / BULLISH CONFIRMATION WITH LADDER ACTIVE",
+            "max_buy_usdt": max_buy,
+            "reason": (
+                "Bullish confirmation is valid, BTC allocation is below target, "
+                "and total planned BTC exposure remains within cap."
+            ),
+            "planned_btc_pct_after_buy_and_open_orders": planned_pct,
+        })
+
+    return actions
+
+
+def apply_gemini_decision_with_guards(
+    config,
+    base_decision,
+    gemini_review,
+    candidate_actions,
+    market,
+    portfolio,
+):
+    """
+    Apply Gemini recommendation only if config allows final-decision override
+    and deterministic guards approve it.
+    """
+    decision_cfg = config.get("gemini_decision", {})
+
+    if not decision_cfg.get("enabled", False):
+        return base_decision
+
+    if not decision_cfg.get("affect_final_decision", False):
+        return base_decision
+
+    if not gemini_review or not gemini_review.get("available", False):
+        return base_decision
+
+    action_key = gemini_review.get("recommended_action_key", "HOLD")
+    confidence = int(float(gemini_review.get("confidence_score", 0) or 0))
+    requested_buy = float(gemini_review.get("recommended_buy_usdt", 0) or 0)
+
+    action_map = {
+        action["key"]: action
+        for action in candidate_actions
+    }
+
+    if action_key not in action_map:
+        return {
+            "signal": "HOLD / GEMINI ACTION REJECTED",
+            "action_usdt": 0,
+            "reason": "Gemini recommended an action outside allowed candidate actions.",
+        }
+
+    selected_action = action_map[action_key]
+    max_buy = float(selected_action.get("max_buy_usdt", 0) or 0)
+
+    if max_buy <= 0:
+        return {
+            "signal": selected_action["signal"],
+            "action_usdt": 0,
+            "reason": selected_action.get("reason", "Gemini selected a non-buy action."),
+        }
+
+    min_confidence = int(decision_cfg.get("min_confidence_to_buy", 70))
+    if confidence < min_confidence:
+        return {
+            "signal": "HOLD / GEMINI BUY CONFIDENCE TOO LOW",
+            "action_usdt": 0,
+            "reason": (
+                f"Gemini buy confidence {confidence}/100 is below required "
+                f"{min_confidence}/100."
+            ),
+        }
+
+    buy_usdt = min(requested_buy, max_buy)
+
+    min_free = float(decision_cfg.get("min_usdt_free_after_buy", 150))
+    if portfolio["usdt_free"] - buy_usdt < min_free:
+        return {
+            "signal": "HOLD / GEMINI BUY BLOCKED BY RESERVE",
+            "action_usdt": 0,
+            "reason": "Buying would reduce USDT free balance below emergency reserve.",
+        }
+
+    planned_pct = calculate_planned_btc_exposure_pct(
+        config=config,
+        portfolio=portfolio,
+        market_price=market["price"],
+        extra_buy_usdt=buy_usdt,
+    )
+
+    max_planned_pct = float(decision_cfg.get("max_total_planned_btc_pct", 55))
+
+    if planned_pct > max_planned_pct:
+        return {
+            "signal": "HOLD / GEMINI BUY BLOCKED BY PLANNED EXPOSURE",
+            "action_usdt": 0,
+            "reason": (
+                f"Planned BTC exposure would become {planned_pct:.1f}%, "
+                f"above cap {max_planned_pct:.1f}%."
+            ),
+        }
+
+    return {
+        "signal": selected_action["signal"],
+        "action_usdt": buy_usdt,
+        "reason": (
+            f"Gemini selected {action_key} with {confidence}/100 confidence. "
+            f"Risk guard approved. Planned BTC exposure after buy and open orders: {planned_pct:.1f}%."
+        ),
+    }
+
+
+def format_gemini_decision_text(config, gemini_review, candidate_actions, final_decision):
+    decision_cfg = config.get("gemini_decision", {})
+
+    if not decision_cfg.get("enabled", False):
+        return "Gemini-assisted decision: disabled"
+
+    if not gemini_review or not gemini_review.get("available", False):
+        return "Gemini-assisted decision unavailable. Final decision follows rule engine."
+
+    action_key = gemini_review.get("recommended_action_key", "HOLD")
+    buy_usdt = float(gemini_review.get("recommended_buy_usdt", 0) or 0)
+    confidence = gemini_review.get("confidence_score", 0)
+    mode = "FINAL DECISION ENABLED" if decision_cfg.get("affect_final_decision", False) else "ADVICE ONLY"
+
+    allowed_keys = [action.get("key") for action in candidate_actions]
+
+    lines = [
+        f"Mode: {mode}",
+        f"Gemini recommended: {action_key}",
+        f"Recommended buy: {buy_usdt:.2f} USDT",
+        f"Confidence: {confidence}/100",
+        f"Allowed actions: {', '.join(allowed_keys)}",
+        f"Final signal: {final_decision.get('signal')}",
+    ]
+
+    if not decision_cfg.get("affect_final_decision", False):
+        lines.append("Note: Gemini recommendation is not changing final decision yet because affect_final_decision=false.")
+
+    return "\n".join(lines)
+
+
+def format_ai_review_from_gemini_decision_json(ai_data):
+    """
+    Render Gemini decision JSON into Telegram-safe HTML.
+    This replaces free-form Gemini HTML so one Gemini call can produce both
+    the machine-readable recommendation and the analyst review.
+    """
+    defaults = {
+        "agreement_with_rule": "cautious_agree",
+        "confidence_score": 0,
+        "market_thesis": "",
+        "portfolio_diagnosis": "",
+        "recovery_assessment": "",
+        "risk_assessment": "",
+        "suggested_manual_plan": "",
+        "invalidation": "",
+        "mental_note": "",
+    }
+
+    for key, value in defaults.items():
+        ai_data.setdefault(key, value)
+
+    try:
+        confidence_score = float(ai_data.get("confidence_score", 0))
+        if 0 <= confidence_score <= 1:
+            confidence_score *= 100
+        confidence_score = int(round(confidence_score))
+    except Exception:
+        confidence_score = ai_data.get("confidence_score", 0)
+
+    return (
+        f"<b>AI Analyst Review</b>\n\n"
+        f"<b>Rule Agreement</b>\n"
+        f"{esc(ai_data.get('agreement_with_rule'))}\n\n"
+        f"<b>Confidence</b>\n"
+        f"<b>{esc(confidence_score)}/100</b>\n\n"
+        f"<b>Market Thesis</b>\n"
+        f"{esc(ai_data.get('market_thesis'))}\n\n"
+        f"<b>Portfolio Diagnosis</b>\n"
+        f"{esc(ai_data.get('portfolio_diagnosis'))}\n\n"
+        f"<b>Recovery Assessment</b>\n"
+        f"{esc(ai_data.get('recovery_assessment'))}\n\n"
+        f"<b>Risk Assessment</b>\n"
+        f"{esc(ai_data.get('risk_assessment'))}\n\n"
+        f"<b>Suggested Manual Plan</b>\n"
+        f"{esc(ai_data.get('suggested_manual_plan'))}\n\n"
+        f"<b>Invalidation</b>\n"
+        f"{esc(ai_data.get('invalidation'))}\n\n"
+        f"<b>Mental Note</b>\n"
+        f"{esc(ai_data.get('mental_note'))}"
+    )
+
 
 # ============================================================
 # Tokocrypto read-only private data
@@ -1459,7 +1824,15 @@ def choose_gemini_model(config, market, portfolio, decision):
     raise RuntimeError("No available Gemini model quota left for this run.")
 
 
-def build_rule_summary_for_llm(config, market, portfolio, decision, open_orders, intrahour_order_events=None):
+def build_rule_summary_for_llm(
+    config,
+    market,
+    portfolio,
+    decision,
+    open_orders,
+    intrahour_order_events=None,
+    candidate_actions=None,
+):
     return {
         "market": {
             "price": market["price"],
@@ -1469,10 +1842,15 @@ def build_rule_summary_for_llm(config, market, portfolio, decision, open_orders,
             "change_7d": market["change_7d"],
             "change_30d": market["change_30d"],
             "from_7d_high": market["from_7d_high"],
+            "from_7d_low": market.get("from_7d_low"),
             "ma_7": market["ma_7"],
             "ma_20": market["ma_20"],
+            "above_ma_7": market.get("above_ma_7"),
+            "above_ma_20": market.get("above_ma_20"),
         },
         "portfolio": {
+            "btc": portfolio["btc"],
+            "usdt": portfolio["usdt"],
             "btc_pct": portfolio["btc_pct"],
             "usdt_pct": portfolio["usdt_pct"],
             "total_value": portfolio["total_value"],
@@ -1481,17 +1859,34 @@ def build_rule_summary_for_llm(config, market, portfolio, decision, open_orders,
             "source": portfolio.get("source"),
             "target_btc_min_pct": config["portfolio"]["target_btc_min_pct"],
             "target_btc_max_pct": config["portfolio"]["target_btc_max_pct"],
+            "emergency_usdt_reserve": config["portfolio"]["emergency_usdt_reserve"],
         },
-        "decision": decision,
+        "base_rule_decision": decision,
         "open_orders": open_orders[:5],
         "intrahour_order_events": intrahour_order_events or {},
+        "candidate_actions": candidate_actions or [],
+        "gemini_decision_config": config.get("gemini_decision", {}),
     }
 
-
-def generate_gemini_explanation(config, market, portfolio, decision, open_orders, intrahour_order_events=None):
+def generate_gemini_explanation(
+    config,
+    market,
+    portfolio,
+    decision,
+    open_orders,
+    intrahour_order_events=None,
+    candidate_actions=None,
+):
     llm_cfg = config.get("llm", {})
     if not llm_cfg.get("enabled", False):
-        return ""
+        return {
+            "available": False,
+            "ai_explanation": "",
+            "recommended_action_key": "HOLD",
+            "recommended_buy_usdt": 0,
+            "confidence_score": 0,
+            "error": "llm disabled",
+        }
 
     ai_error_fallback = (
         f"<b>AI Analyst Review</b>\n\n"
@@ -1515,6 +1910,16 @@ def generate_gemini_explanation(config, market, portfolio, decision, open_orders
         f"Missing AI output is not a trading signal."
     )
 
+    def unavailable(reason):
+        return {
+            "available": False,
+            "ai_explanation": ai_error_fallback,
+            "recommended_action_key": "HOLD",
+            "recommended_buy_usdt": 0,
+            "confidence_score": 0,
+            "error": reason,
+        }
+
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         print("[WARN] GEMINI_API_KEY is missing")
@@ -1526,7 +1931,16 @@ def generate_gemini_explanation(config, market, portfolio, decision, open_orders
             "quota_reason": "",
             "ai_source": "unavailable",
         }
-        return ai_error_fallback
+        return unavailable("GEMINI_API_KEY is missing")
+
+    candidate_actions = candidate_actions or [
+        {
+            "key": "HOLD",
+            "signal": "HOLD",
+            "max_buy_usdt": 0,
+            "reason": "Default safe action.",
+        }
+    ]
 
     try:
         routing = choose_gemini_model(config, market, portfolio, decision)
@@ -1540,16 +1954,23 @@ def generate_gemini_explanation(config, market, portfolio, decision, open_orders
             "quota_reason": "",
             "ai_source": "unavailable",
         }
-        return ai_error_fallback
+        return unavailable(f"Gemini routing failed: {error}")
 
     model = routing["model"]
     max_output_tokens = routing["max_output_tokens"]
     use_grounding = routing["use_grounding"]
     routing_reason = routing["routing_reason"]
-
     temperature = float(llm_cfg.get("temperature", 0.2))
 
-    context = build_rule_summary_for_llm(config, market, portfolio, decision, open_orders, intrahour_order_events=intrahour_order_events,)
+    context = build_rule_summary_for_llm(
+        config=config,
+        market=market,
+        portfolio=portfolio,
+        decision=decision,
+        open_orders=open_orders,
+        intrahour_order_events=intrahour_order_events,
+        candidate_actions=candidate_actions,
+    )
 
     def set_last_routing(base_routing, ai_source, request_status=""):
         stored = dict(base_routing)
@@ -1557,161 +1978,7 @@ def generate_gemini_explanation(config, market, portfolio, decision, open_orders
         stored["request_status"] = request_status
         config["_last_llm_routing"] = stored
 
-    def run_fallback_json(reason):
-        """
-        Fallback JSON dipakai kalau:
-        - main model HTTP error,
-        - main model quota/rate-limit error,
-        - response utama kosong,
-        - response malformed,
-        - response tidak punya END_REVIEW.
-
-        Fallback dicoba berantai sesuai llm.fallback_models di config_git.yaml.
-        """
-        print(f"[WARN] Trying Gemini fallback JSON because: {reason}")
-
-        fallback_configs = get_fallback_model_configs(llm_cfg)
-
-        for fallback_cfg in fallback_configs:
-            fallback_model = fallback_cfg["model"]
-            fallback_tokens = fallback_cfg["max_output_tokens"]
-            fallback_daily_limit = fallback_cfg["daily_limit"]
-
-            fallback_available, fallback_reason = is_model_available(
-                config,
-                fallback_model,
-                fallback_daily_limit,
-            )
-
-            if not fallback_available:
-                print(f"[WARN] Skipping fallback model {fallback_model}: {fallback_reason}")
-                continue
-
-            fallback_routing = {
-                "mode": "fallback_json",
-                "model": fallback_model,
-                "max_output_tokens": fallback_tokens,
-                "daily_limit": fallback_daily_limit,
-                "use_grounding": False,
-                "routing_reason": f"fallback JSON because: {reason}",
-                "quota_reason": fallback_reason,
-                "ai_source": "fallback_json",
-            }
-
-            fallback_url = (
-                f"https://generativelanguage.googleapis.com/v1beta/models/"
-                f"{fallback_model}:generateContent?key={api_key}"
-            )
-
-            fallback_payload = {
-                "contents": [
-                    {
-                        "parts": [
-                            {
-                                "text": (
-                                    "You are a portfolio-aware BTC market analyst for a manual-only BTC Discipline Agent. "
-                                    "Return ONLY valid JSON. No Markdown. No HTML. No code fences. "
-                                    "Do not override the rule-engine signal. "
-                                    "Do not suggest leverage, futures, margin, auto-trading, or all-in. "
-                                    "You may agree or cautiously disagree with the rule-engine signal, but do not override it. "
-                                    "If open orders are active, do not recommend extra manual BTC buy orders. "
-                                    "If BTC allocation is below target but open orders are active, usually use cautious_agree. "
-                                    "If intrahour_order_events indicates possible_fill_price_touched, do not claim confirmed fill; "
-                                    "tell the user to verify Tokocrypto and update config before any new manual decision. "
-                                    "Use this JSON schema exactly: "
-                                    "{"
-                                    "\"agreement_with_rule\":\"agree | cautious_agree | disagree_but_do_not_override\","
-                                    "\"confidence_score\":0,"
-                                    "\"market_thesis\":\"concise market thesis\","
-                                    "\"portfolio_diagnosis\":\"portfolio allocation diagnosis\","
-                                    "\"recovery_assessment\":\"recovery realism assessment\","
-                                    "\"risk_assessment\":\"main risk assessment\","
-                                    "\"suggested_manual_plan\":\"manual-only plan\","
-                                    "\"invalidation\":\"specific invalidation condition\","
-                                    "\"mental_note\":\"short mental note\""
-                                    "} "
-                                    f"Data: {context}"
-                                )
-                            }
-                        ]
-                    }
-                ],
-                "generationConfig": {
-                    "temperature": temperature,
-                    "maxOutputTokens": fallback_tokens,
-                    "responseMimeType": "application/json",
-                }
-            }
-
-            try:
-                fallback_response = requests.post(fallback_url, json=fallback_payload, timeout=30)
-
-                record_llm_model_usage(
-                    config=config,
-                    model=fallback_model,
-                    mode="fallback_json",
-                    use_grounding=False,
-                    status="ok" if fallback_response.ok else "http_error",
-                    response_status=fallback_response.status_code,
-                    error_message=fallback_response.text if not fallback_response.ok else "",
-                )
-
-                if not fallback_response.ok:
-                    print(
-                        f"[WARN] Gemini fallback error with {fallback_model}: "
-                        f"{fallback_response.status_code} {fallback_response.text}"
-                    )
-                    continue
-
-                fallback_data = fallback_response.json()
-                candidates = fallback_data.get("candidates", [])
-                if not candidates:
-                    print("[WARN] Gemini fallback returned no candidates")
-                    continue
-
-                parts = candidates[0].get("content", {}).get("parts", [])
-                if not parts:
-                    print("[WARN] Gemini fallback returned no parts")
-                    continue
-
-                raw_text = parts[0].get("text", "").strip()
-                if not raw_text:
-                    print("[WARN] Gemini fallback returned empty text")
-                    continue
-
-                try:
-                    ai_data = extract_json_object(raw_text)
-                    set_last_routing(fallback_routing, "fallback_json", "success")
-                    return format_ai_review_from_json(ai_data)
-                except Exception as parse_error:
-                    print(f"[WARN] Gemini fallback JSON parse failed: {parse_error}")
-                    print(f"[WARN] Raw fallback output: {raw_text[:500]}")
-                    continue
-
-            except Exception as fallback_error:
-                print(f"[WARN] Gemini fallback failed with {fallback_model}: {fallback_error}")
-
-                record_llm_model_usage(
-                    config=config,
-                    model=fallback_model,
-                    mode="fallback_json",
-                    use_grounding=False,
-                    status="exception",
-                    response_status=None,
-                    error_message=str(fallback_error),
-                )
-
-                continue
-
-        config["_last_llm_routing"] = {
-            "mode": "unavailable",
-            "model": "none",
-            "use_grounding": False,
-            "routing_reason": f"all fallback models failed after: {reason}",
-            "quota_reason": "",
-            "ai_source": "unavailable",
-        }
-        return ai_error_fallback
+    action_keys = [action["key"] for action in candidate_actions]
 
     grounding_instruction = ""
     if use_grounding:
@@ -1729,14 +1996,15 @@ Do not turn news sentiment into an aggressive trading recommendation.
 """
 
     prompt = f"""
-You are a crypto decision-support analyst for a manual-only BTC Discipline Agent.
+You are a BTC decision-support analyst for a manual-only BTC Discipline Agent.
 
 The bot is NOT allowed to trade.
 The user manually executes decisions.
-You must respect the rule-engine signal.
-Do not override the signal.
-Do not tell the user to all-in.
-Do not suggest leverage, futures, margin, or high-risk behavior.
+You must choose exactly one action from candidate_actions.
+Do not invent a new action.
+Do not recommend more than max_buy_usdt from the selected action.
+Do not override hard risk guards.
+Do not recommend leverage, futures, margin, all-in, auto-trading, order cancellation, or withdrawal.
 
 Model routing:
 - Mode used: {routing.get("mode")}
@@ -1746,115 +2014,50 @@ Model routing:
 
 {grounding_instruction}
 
-Your task:
-Act as a portfolio-aware BTC market analyst, not merely a rule explainer.
-Analyze the BTC/USDT situation based on:
-- rule-engine signal,
-- market regime,
-- portfolio allocation,
-- recovery gap,
-- open orders,
-- risk and mental discipline.
+Your role:
+Analyze market, portfolio, manual config, open orders, recent price check, recovery gap, and risk.
+Be sharper than a simple HOLD explainer, but remain disciplined.
 
-Make the analysis deeper than a simple HOLD explanation.
-Include:
-- market structure,
-- portfolio exposure,
-- open-order ladder implication,
-- recovery pressure,
-- behavioral risk,
-- what would change the next decision.
+Candidate action keys you may choose:
+{action_keys}
 
-You may agree or cautiously disagree with the rule-engine signal, but you must NOT override it.
-The final decision remains manual-only and rule-engine guarded.
-Do NOT recommend auto-trading.
-Do NOT suggest leverage, futures, margin, or all-in behavior.
-
-Use natural English, concise but analytical.
-Do NOT repeat the full numeric report.
-Do NOT list all open orders again.
-Do NOT summarize every raw number.
-Mention only the most important numbers if necessary.
-Give interpretation only.
-
-If open orders are active:
-- Explain that extra manual BTC buy orders should NOT be placed.
-- The reason is to avoid double entry because existing buy orders are already active.
-- Do NOT say "no additional USDT actions"; the issue is not USDT, the issue is extra manual BTC buying.
+Decision rules:
+- recommended_action_key must be exactly one candidate action key.
+- recommended_buy_usdt must be 0 if selected action max_buy_usdt is 0.
+- If choosing a buy action, recommended_buy_usdt must be small and <= max_buy_usdt.
+- If open orders are active, a buy action is allowed only when BUY_SMALL_CONFIRMATION_WITH_LADDER is present in candidate_actions.
+- Treat BUY_SMALL_CONFIRMATION_WITH_LADDER as upside participation, not FOMO.
+- Existing lower limit orders remain a downside ladder.
+- Explain planned exposure risk if choosing a buy action.
+- If HOLD_OPEN_ORDERS_ACTIVE is better, explain why waiting is better.
+- If HOLD_REVIEW_LADDER is better, explain that market may be improving but ladder should be reviewed.
+- If intrahour_order_events indicates possible_fill_price_touched, do not recommend buy; tell user to verify Tokocrypto and update config.
+- Do not claim a possible fill is confirmed.
 
 Allocation interpretation:
 - If btc_pct is below target_btc_min_pct, say BTC allocation is BELOW TARGET for recovery mode.
 - If btc_pct is between target_btc_min_pct and target_btc_max_pct, say it is within target range.
 - If btc_pct is above target_btc_max_pct, say it is too aggressive.
 
-Agreement rules:
-- agreement_with_rule must be one of: "agree", "cautious_agree", "disagree_but_do_not_override".
-- confidence_score must be an integer from 0 to 100.
-- If the portfolio is underallocated to BTC but open orders are active, usually use "cautious_agree".
-- If the rule signal is HOLD because open orders are active, do not recommend extra manual BTC buying.
+Return ONLY valid JSON.
+No Markdown.
+No HTML.
+No code fences.
 
-Return ONLY Telegram-compatible HTML.
-Do not use Markdown.
-Do not use JSON.
-Do not use code fences.
-Do not write any intro sentence.
-Start exactly with <b>AI Analyst Review</b>.
-
-If intrahour_order_events indicates possible_fill_price_touched:
-- Do NOT claim the order is confirmed filled.
-- Say that CoinGecko recent price window touched the manual order level.
-- Mention the estimated portfolio only as an estimate, not source of truth.
-- Tell the user to verify Tokocrypto execution status.
-- Treat the config as potentially stale until the user updates portfolio and manual_open_orders.
-- Recommended action must remain HOLD / VERIFY, not a new buy.
-
-Use exactly these sections:
-<b>AI Analyst Review</b>
-<b>Rule Agreement</b>
-<b>Confidence</b>
-<b>Market Thesis</b>
-<b>Portfolio Diagnosis</b>
-<b>Recovery Assessment</b>
-<b>Risk Assessment</b>
-<b>Suggested Manual Plan</b>
-<b>Invalidation</b>
-<b>Mental Note</b>
-
-Format:
-<b>AI Analyst Review</b>
-
-<b>Rule Agreement</b>
-agree | cautious_agree | disagree_but_do_not_override
-
-<b>Confidence</b>
-70/100
-
-<b>Market Thesis</b>
-...
-
-<b>Portfolio Diagnosis</b>
-...
-
-<b>Recovery Assessment</b>
-...
-
-<b>Risk Assessment</b>
-...
-
-<b>Suggested Manual Plan</b>
-...
-
-<b>Invalidation</b>
-...
-
-<b>Mental Note</b>
-...
-
-END_REVIEW
-
-Keep each section concise.
-Total response under 320 words.
-Do not stop before END_REVIEW.
+Use exactly this schema:
+{{
+  "recommended_action_key": "one candidate action key",
+  "recommended_buy_usdt": 0,
+  "agreement_with_rule": "agree | cautious_agree | disagree_but_do_not_override",
+  "confidence_score": 0,
+  "market_thesis": "concise market thesis",
+  "portfolio_diagnosis": "portfolio allocation diagnosis",
+  "recovery_assessment": "recovery realism assessment",
+  "risk_assessment": "main risk assessment",
+  "suggested_manual_plan": "manual-only plan",
+  "invalidation": "specific invalidation condition",
+  "mental_note": "short mental note"
+}}
 
 Data:
 {context}
@@ -1876,6 +2079,7 @@ Data:
         "generationConfig": {
             "temperature": temperature,
             "maxOutputTokens": max_output_tokens,
+            "responseMimeType": "application/json",
         },
     }
 
@@ -1901,37 +2105,82 @@ Data:
 
         if not response.ok:
             print(f"[WARN] Gemini error with {model}: {response.status_code} {response.text}")
-            return run_fallback_json(f"main request HTTP error {response.status_code}")
+            set_last_routing(routing, "unavailable", f"http_error_{response.status_code}")
+            return unavailable(f"main request HTTP error {response.status_code}")
 
         data = response.json()
 
+        if use_grounding:
+            try:
+                record_grounding_usage(config)
+            except TypeError:
+                record_grounding_usage()
+
         candidates = data.get("candidates", [])
         if not candidates:
-            return run_fallback_json("main response has no candidates")
+            set_last_routing(routing, "unavailable", "no_candidates")
+            return unavailable("main response has no candidates")
 
         parts = candidates[0].get("content", {}).get("parts", [])
         if not parts:
-            return run_fallback_json("main response has no parts")
+            set_last_routing(routing, "unavailable", "no_parts")
+            return unavailable("main response has no parts")
 
         raw_text = parts[0].get("text", "").strip()
         if not raw_text:
-            return run_fallback_json("main response text is empty")
+            set_last_routing(routing, "unavailable", "empty_text")
+            return unavailable("main response text is empty")
 
-        end_markers = ["END_REVIEW", "End Review", "END REVIEW"]
-        if not any(marker in raw_text for marker in end_markers):
-            print(f"[WARN] Gemini HTML output incomplete: {raw_text[:500]}")
-            return run_fallback_json("main HTML output missing END_REVIEW")
+        try:
+            ai_data = extract_json_object(raw_text)
+        except Exception as parse_error:
+            print(f"[WARN] Gemini decision JSON parse failed: {parse_error}")
+            print(f"[WARN] Raw Gemini output: {raw_text[:500]}")
+            set_last_routing(routing, "unavailable", "json_parse_failed")
+            return unavailable(f"Gemini JSON parse failed: {parse_error}")
 
-        for marker in end_markers:
-            raw_text = raw_text.replace(marker, "")
+        recommended_key = ai_data.get("recommended_action_key", "HOLD")
+        if recommended_key not in action_keys:
+            ai_data["recommended_action_key"] = "HOLD"
+            ai_data["recommended_buy_usdt"] = 0
+            ai_data["risk_assessment"] = (
+                str(ai_data.get("risk_assessment", "")) +
+                " Gemini originally recommended an action outside allowed actions, so it was forced to HOLD."
+            ).strip()
 
-        cleaned_text = clean_ai_explanation(raw_text)
+        try:
+            recommended_buy = float(ai_data.get("recommended_buy_usdt", 0) or 0)
+        except Exception:
+            recommended_buy = 0
 
-        if not cleaned_text:
-            return run_fallback_json("cleaned main HTML output is empty")
+        try:
+            confidence_score = float(ai_data.get("confidence_score", 0) or 0)
+            if 0 <= confidence_score <= 1:
+                confidence_score *= 100
+            confidence_score = int(round(confidence_score))
+        except Exception:
+            confidence_score = 0
 
-        set_last_routing(routing, "main_html", "success")
-        return cleaned_text
+        ai_explanation = format_ai_review_from_gemini_decision_json(ai_data)
+
+        result = {
+            "available": True,
+            "ai_explanation": ai_explanation,
+            "recommended_action_key": ai_data.get("recommended_action_key", "HOLD"),
+            "recommended_buy_usdt": recommended_buy,
+            "confidence_score": confidence_score,
+            "agreement_with_rule": ai_data.get("agreement_with_rule", ""),
+            "market_thesis": ai_data.get("market_thesis", ""),
+            "portfolio_diagnosis": ai_data.get("portfolio_diagnosis", ""),
+            "recovery_assessment": ai_data.get("recovery_assessment", ""),
+            "risk_assessment": ai_data.get("risk_assessment", ""),
+            "suggested_manual_plan": ai_data.get("suggested_manual_plan", ""),
+            "invalidation": ai_data.get("invalidation", ""),
+            "mental_note": ai_data.get("mental_note", ""),
+        }
+
+        set_last_routing(routing, "main_json", "success")
+        return result
 
     except Exception as error:
         print(f"[WARN] Gemini failed: {error}")
@@ -1946,8 +2195,9 @@ Data:
             error_message=str(error),
         )
 
-        return run_fallback_json(f"main request exception: {error}")
-
+        set_last_routing(routing, "unavailable", "exception")
+        return unavailable(f"main request exception: {error}")
+    
 
 def extract_json_object(text):
     """
@@ -2210,7 +2460,10 @@ def format_open_orders(open_orders):
 
 def build_message(config, market, portfolio, decision,
                   open_orders=None, ai_explanation="", open_orders_error="",
-                  intrahour_order_events=None):
+                  intrahour_order_events=None,
+                  base_decision=None,
+                  candidate_actions=None,
+                  gemini_review=None):
     repo_reminder = build_repo_reminder(config)
     open_orders_text = format_open_orders(open_orders or [])
     intrahour_events_text = format_intrahour_order_events(intrahour_order_events or {})
@@ -2233,6 +2486,15 @@ def build_message(config, market, portfolio, decision,
         )
 
     ai_text = f"\n\n{ai_explanation}" if ai_explanation else ""
+
+    base_decision = base_decision or decision
+    candidate_actions = candidate_actions or []
+    gemini_decision_text = format_gemini_decision_text(
+        config=config,
+        gemini_review=gemini_review or {},
+        candidate_actions=candidate_actions,
+        final_decision=decision,
+    )
 
     llm_routing = config.get("_last_llm_routing")
 
@@ -2303,6 +2565,14 @@ def build_message(config, market, portfolio, decision,
         f"<b>Recent Price Check</b>\n"
         f"{esc(intrahour_events_text)}\n\n"
 
+        f"<b>Rule Engine</b>\n"
+        f"Base signal: <b>{esc(base_decision['signal'])}</b>\n"
+        f"Base action: <b>{base_decision['action_usdt']:.2f} USDT</b>\n"
+        f"Base reason: {esc(base_decision['reason'])}\n\n"
+
+        f"<b>Gemini-Assisted Decision</b>\n"
+        f"{esc(gemini_decision_text)}\n\n"
+
         f"<b>Decision</b>\n"
         f"Signal: <b>{esc(decision['signal'])}</b>\n"
         f"Recommended action: <b>{decision['action_usdt']:.2f} USDT</b>\n"
@@ -2314,6 +2584,7 @@ def build_message(config, market, portfolio, decision,
         f"{esc(repo_reminder)}"
         f"{ai_text}"
     )
+
 
 # ============================================================
 # Journal logging
@@ -2372,14 +2643,12 @@ def main():
         current_price=market["price"],
     )
 
-    decision = decide_signal(config, market, portfolio)
-    decision = adjust_decision_for_intrahour_order_events(
+    base_decision = decide_signal(config, market, portfolio)
+    base_decision = adjust_decision_for_intrahour_order_events(
         config=config,
-        decision=decision,
+        decision=base_decision,
         intrahour_order_events=intrahour_order_events,
     )
-
-    append_signal_log(market, portfolio, decision)
 
     open_orders = []
     open_orders_error = ""
@@ -2400,14 +2669,34 @@ def main():
                         "status": order.get("status"),
                     })
 
-    ai_explanation = generate_gemini_explanation(
+    candidate_actions = build_gemini_candidate_actions(
         config=config,
         market=market,
         portfolio=portfolio,
-        decision=decision,
         open_orders=open_orders,
         intrahour_order_events=intrahour_order_events,
     )
+
+    gemini_review = generate_gemini_explanation(
+        config=config,
+        market=market,
+        portfolio=portfolio,
+        decision=base_decision,
+        open_orders=open_orders,
+        intrahour_order_events=intrahour_order_events,
+        candidate_actions=candidate_actions,
+    )
+
+    decision = apply_gemini_decision_with_guards(
+        config=config,
+        base_decision=base_decision,
+        gemini_review=gemini_review,
+        candidate_actions=candidate_actions,
+        market=market,
+        portfolio=portfolio,
+    )
+
+    append_signal_log(market, portfolio, decision)
 
     message = build_message(
         config=config,
@@ -2415,9 +2704,12 @@ def main():
         portfolio=portfolio,
         decision=decision,
         open_orders=open_orders,
-        ai_explanation=ai_explanation,
+        ai_explanation=gemini_review.get("ai_explanation", ""),
         open_orders_error=open_orders_error,
         intrahour_order_events=intrahour_order_events,
+        base_decision=base_decision,
+        candidate_actions=candidate_actions,
+        gemini_review=gemini_review,
     )
 
     send_telegram(message)
