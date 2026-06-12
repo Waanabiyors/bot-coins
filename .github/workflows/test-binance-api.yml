@@ -1,0 +1,68 @@
+name: Test Binance API
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-binance-public-api:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Test Binance public REST endpoints
+        shell: bash
+        run: |
+          set +e
+
+          echo "========================================"
+          echo "Test 1: Binance main REST time endpoint"
+          echo "========================================"
+          curl -sS -L \
+            --connect-timeout 10 \
+            --max-time 20 \
+            -w "\nHTTP_STATUS:%{http_code}\nTOTAL_TIME:%{time_total}\n" \
+            "https://api.binance.com/api/v3/time"
+
+          echo ""
+          echo "========================================"
+          echo "Test 2: Binance market-data-only klines endpoint"
+          echo "========================================"
+          curl -sS -L \
+            --connect-timeout 10 \
+            --max-time 20 \
+            -w "\nHTTP_STATUS:%{http_code}\nTOTAL_TIME:%{time_total}\n" \
+            "https://data-api.binance.vision/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=5"
+
+          echo ""
+          echo "========================================"
+          echo "Test 3: Binance ticker price endpoint"
+          echo "========================================"
+          curl -sS -L \
+            --connect-timeout 10 \
+            --max-time 20 \
+            -w "\nHTTP_STATUS:%{http_code}\nTOTAL_TIME:%{time_total}\n" \
+            "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT"
+
+          echo ""
+          echo "========================================"
+          echo "Test 4: Alternate Binance REST endpoints"
+          echo "========================================"
+
+          for endpoint in \
+            "https://api1.binance.com/api/v3/time" \
+            "https://api2.binance.com/api/v3/time" \
+            "https://api3.binance.com/api/v3/time" \
+            "https://api4.binance.com/api/v3/time"
+          do
+            echo ""
+            echo "Testing: $endpoint"
+            curl -sS -L \
+              --connect-timeout 10 \
+              --max-time 20 \
+              -w "\nHTTP_STATUS:%{http_code}\nTOTAL_TIME:%{time_total}\n" \
+              "$endpoint"
+          done
+
+          echo ""
+          echo "========================================"
+          echo "Done. Read HTTP_STATUS and error messages above."
+          echo "========================================"
