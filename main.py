@@ -709,20 +709,75 @@ def get_gemini_exposure_tier(config, market, has_open_orders):
     - early_confirmation: BTC above MA7, but not confirmed above MA20.
     - confirmed_breakout: BTC above MA20 confirmation threshold.
     - overheated: 24h pump too high; block fresh buy.
+
+    This function includes safe defaults so the buy gate does not silently fail
+    if exposure_policy is missing or not loaded correctly.
     """
     decision_cfg = config.get("gemini_decision", {})
     exposure_policy = decision_cfg.get("exposure_policy", {})
 
+    default_exposure_policy = {
+        "enabled": True,
+        "early_confirmation": {
+            "description": "BTC above MA7 but still below confirmed MA20 breakout",
+            "max_buy_usdt_with_open_orders": 15,
+            "max_buy_usdt_without_open_orders": 25,
+            "max_upside_btc_pct_after_buy": 35,
+            "max_downside_planned_btc_pct": 55,
+            "min_confidence_to_buy": 85,
+        },
+        "confirmed_breakout": {
+            "description": "BTC above MA20 with confirmation",
+            "max_buy_usdt_with_open_orders": 25,
+            "max_buy_usdt_without_open_orders": 40,
+            "max_upside_btc_pct_after_buy": 45,
+            "max_downside_planned_btc_pct": 60,
+            "min_confidence_to_buy": 80,
+        },
+        "overheated": {
+            "description": "BTC pumping too fast; block fresh buy",
+            "block_buy_if_24h_pump_above_pct": 4,
+            "max_buy_usdt_with_open_orders": 0,
+            "max_buy_usdt_without_open_orders": 0,
+        },
+    }
+
+    if not isinstance(exposure_policy, dict):
+        exposure_policy = {}
+
     if not exposure_policy.get("enabled", False):
-        return None
+        print(
+            "[BUY_GATE] exposure_policy missing/disabled; using safe default exposure policy",
+            flush=True,
+        )
+        exposure_policy = default_exposure_policy
+
+    for tier_name in ["early_confirmation", "confirmed_breakout", "overheated"]:
+        if tier_name not in exposure_policy:
+            exposure_policy[tier_name] = default_exposure_policy[tier_name]
 
     price = float(market.get("price", 0) or 0)
     ma7 = float(market.get("ma_7", 0) or 0)
     ma20 = float(market.get("ma_20", 0) or 0)
     change_24h = float(market.get("change_24h", 0) or 0)
 
+    print(
+        "[BUY_GATE] exposure_policy debug | "
+        f"enabled={exposure_policy.get('enabled')} | "
+        f"has_early={bool(exposure_policy.get('early_confirmation'))} | "
+        f"has_breakout={bool(exposure_policy.get('confirmed_breakout'))} | "
+        f"has_overheated={bool(exposure_policy.get('overheated'))} | "
+        f"price={price} | ma7={ma7} | ma20={ma20} | change_24h={change_24h}",
+        flush=True,
+    )
+
     if price <= 0 or ma7 <= 0 or ma20 <= 0:
-        return None
+        return {
+            "name": "invalid_market_data",
+            "can_buy": False,
+            "settings": {},
+            "reason": "Price, MA7, or MA20 is invalid. Fresh buy blocked.",
+        }
 
     overheated_cfg = exposure_policy.get("overheated", {})
     pump_block_pct = float(overheated_cfg.get("block_buy_if_24h_pump_above_pct", 4))
@@ -763,7 +818,12 @@ def get_gemini_exposure_tier(config, market, has_open_orders):
             "reason": "BTC is above MA7 but has not confirmed above MA20 yet.",
         }
 
-    return None
+    return {
+        "name": "no_bullish_confirmation",
+        "can_buy": False,
+        "settings": {},
+        "reason": "BTC is not above MA7. Fresh buy blocked.",
+    }
 
 
 def get_tiered_max_buy_usdt(exposure_tier, has_open_orders):
