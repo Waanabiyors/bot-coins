@@ -932,6 +932,16 @@ def format_gemini_decision_text(config, gemini_review, candidate_actions, final_
         return "Gemini-assisted decision: disabled"
 
     if not gemini_review or not gemini_review.get("available", False):
+        error = ""
+        if gemini_review:
+            error = gemini_review.get("error", "")
+
+        if error:
+            return (
+                "Gemini-assisted decision unavailable. Final decision follows rule engine.\n"
+                f"Error: {error}"
+            )
+
         return "Gemini-assisted decision unavailable. Final decision follows rule engine."
 
     action_key = gemini_review.get("recommended_action_key", "HOLD")
@@ -2079,7 +2089,7 @@ Data:
         "generationConfig": {
             "temperature": temperature,
             "maxOutputTokens": max_output_tokens,
-            "responseMimeType": "application/json",
+            #"responseMimeType": "application/json",
         },
     }
 
