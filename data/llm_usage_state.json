@@ -15,10 +15,10 @@
       "cooldown_until_utc": ""
     },
     "gemini-3.5-flash": {
-      "requests_today": 7,
-      "success_today": 7,
+      "requests_today": 8,
+      "success_today": 8,
       "errors_today": 0,
-      "last_used_utc": "2026-06-13T19:01:05.760631+00:00",
+      "last_used_utc": "2026-06-13T21:01:09.591048+00:00",
       "last_status": "ok",
       "last_mode": "deep_primary",
       "last_response_status": 200,
