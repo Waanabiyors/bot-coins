@@ -62,43 +62,109 @@ def esc(value):
 # Telegram
 # ============================================================
 
+TELEGRAM_SAFE_MESSAGE_LIMIT = 3800
+
+
+def strip_html_tags(text):
+    return re.sub(r"</?[^>]+>", "", str(text))
+
+
+def split_telegram_message(message, limit=TELEGRAM_SAFE_MESSAGE_LIMIT):
+    """
+    Split long Telegram messages safely.
+
+    Strategy:
+    - Prefer splitting by double-newline sections so HTML tags are less likely to break.
+    - If one section is still too long, strip HTML and split by hard character limit.
+    """
+    message = str(message)
+
+    if len(message) <= limit:
+        return [message]
+
+    sections = message.split("\n\n")
+    chunks = []
+    current = ""
+
+    for section in sections:
+        candidate = section if not current else current + "\n\n" + section
+
+        if len(candidate) <= limit:
+            current = candidate
+            continue
+
+        if current:
+            chunks.append(current)
+            current = ""
+
+        if len(section) <= limit:
+            current = section
+            continue
+
+        plain_section = strip_html_tags(section)
+
+        for start in range(0, len(plain_section), limit):
+            chunks.append(plain_section[start:start + limit])
+
+    if current:
+        chunks.append(current)
+
+    return chunks
+
+
 def send_telegram(message):
     bot_token = get_required_env("TELEGRAM_BOT_TOKEN")
     chat_id = get_required_env("TELEGRAM_CHAT_ID")
 
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": message,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True,
-    }
 
-    response = requests.post(url, json=payload, timeout=25)
+    chunks = split_telegram_message(message)
 
-    print(f"Telegram status code: {response.status_code}")
-    print(f"Telegram response: {response.text}")
+    total_chunks = len(chunks)
 
-    if not response.ok:
-        raise RuntimeError(f"Telegram error: {response.text}")
-    if not response.ok:
-       print("[WARN] Telegram HTML parse failed. Retrying as plain text.")
+    for index, chunk in enumerate(chunks, start=1):
+        if total_chunks > 1:
+            prefix = f"<b>BTC Discipline Agent</b> — Part {index}/{total_chunks}\n\n"
 
-       plain_message = re.sub(r"</?[^>]+>", "", message)
-       
-       plain_payload = {
-           "chat_id": chat_id,
-           "text": plain_message,
-           "disable_web_page_preview": True,
-       }
-       
-       plain_response = requests.post(url, json=plain_payload, timeout=25)
+            if index == 1:
+                chunk_to_send = chunk
+            else:
+                chunk_to_send = prefix + chunk
+        else:
+            chunk_to_send = chunk
 
-       print(f"Telegram plain status code: {plain_response.status_code}")
-       print(f"Telegram plain response: {plain_response.text}")
-       
-       if not plain_response.ok:
-           raise RuntimeError(f"Telegram error: {plain_response.text}")
+        payload = {
+            "chat_id": chat_id,
+            "text": chunk_to_send,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
+
+        response = requests.post(url, json=payload, timeout=25)
+
+        print(f"Telegram status code: {response.status_code}")
+        print(f"Telegram response: {response.text}")
+
+        if response.ok:
+            continue
+
+        print("[WARN] Telegram HTML send failed. Retrying this chunk as plain text.")
+
+        plain_text = strip_html_tags(chunk_to_send)
+
+        plain_payload = {
+            "chat_id": chat_id,
+            "text": plain_text[:TELEGRAM_SAFE_MESSAGE_LIMIT],
+            "disable_web_page_preview": True,
+        }
+
+        plain_response = requests.post(url, json=plain_payload, timeout=25)
+
+        print(f"Telegram plain status code: {plain_response.status_code}")
+        print(f"Telegram plain response: {plain_response.text}")
+
+        if not plain_response.ok:
+            raise RuntimeError(f"Telegram error: {plain_response.text}")
 
 
 # ============================================================
