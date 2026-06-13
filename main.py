@@ -111,6 +111,118 @@ def split_telegram_message(message, limit=TELEGRAM_SAFE_MESSAGE_LIMIT):
 
     return chunks
 
+import os
+import json
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+import html
+import ccxt
+import pandas as pd
+import requests
+import yaml
+import re
+from dotenv import load_dotenv
+
+
+load_dotenv()
+
+
+#CONFIG_FILE = "config_git.yaml"
+CONFIG_FILE = os.getenv("BTC_AGENT_CONFIG", "config_git.yaml")
+
+# ============================================================
+# Safety guard
+# ============================================================
+
+def enforce_no_trading(config):
+    """
+    Hard safety gate.
+    Bot ini tidak boleh melakukan trading, cancel order, atau withdrawal.
+    Kalau config salah di-set, script langsung berhenti.
+    """
+    safety = config.get("safety", {})
+
+    if safety.get("allow_trading", False):
+        raise RuntimeError("Safety violation: allow_trading must remain false.")
+
+    if safety.get("allow_withdrawal", False):
+        raise RuntimeError("Safety violation: allow_withdrawal must remain false.")
+
+    if safety.get("allow_order_cancel", False):
+        raise RuntimeError("Safety violation: allow_order_cancel must remain false.")
+
+
+# ============================================================
+# Config and environment
+# ============================================================
+
+def load_config():
+    with open(CONFIG_FILE, "r", encoding="utf-8") as file:
+        return yaml.safe_load(file)
+
+
+def get_required_env(name):
+    value = os.getenv(name)
+    if not value:
+        raise ValueError(f"Missing required environment variable: {name}")
+    return value
+
+def esc(value):
+    return html.escape(str(value), quote=False)
+
+
+# ============================================================
+# Telegram
+# ============================================================
+
+TELEGRAM_SAFE_MESSAGE_LIMIT = 3800
+
+
+def strip_html_tags(text):
+    return re.sub(r"</?[^>]+>", "", str(text))
+
+
+def split_telegram_message(message, limit=TELEGRAM_SAFE_MESSAGE_LIMIT):
+    """
+    Split long Telegram messages safely.
+
+    Strategy:
+    - Prefer splitting by double-newline sections so HTML tags are less likely to break.
+    - If one section is still too long, strip HTML and split by hard character limit.
+    """
+    message = str(message)
+
+    if len(message) <= limit:
+        return [message]
+
+    sections = message.split("\n\n")
+    chunks = []
+    current = ""
+
+    for section in sections:
+        candidate = section if not current else current + "\n\n" + section
+
+        if len(candidate) <= limit:
+            current = candidate
+            continue
+
+        if current:
+            chunks.append(current)
+            current = ""
+
+        if len(section) <= limit:
+            current = section
+            continue
+
+        plain_section = strip_html_tags(section)
+
+        for start in range(0, len(plain_section), limit):
+            chunks.append(plain_section[start:start + limit])
+
+    if current:
+        chunks.append(current)
+
+    return chunks
 
 def send_telegram(message):
     bot_token = get_required_env("TELEGRAM_BOT_TOKEN")
@@ -262,7 +374,6 @@ def get_24h_ticker(symbol):
 
     return get_coingecko_price()
 
-
 def get_daily_klines(symbol, days=30):
     """
     Untuk historical daily data, kita pakai CoinGecko agar stabil.
@@ -406,7 +517,6 @@ def get_recent_intrahour_price_window(config):
             "rows": [],
         }
 
-
 def detect_intrahour_order_events(config, intrahour_window, current_price):
     """
     Detect whether recent CoinGecko prices touched configured manual open-order levels.
@@ -519,7 +629,6 @@ def detect_intrahour_order_events(config, intrahour_window, current_price):
         )
 
     return result
-
 
 def estimate_portfolio_if_touched_orders_filled(config, touched_orders, current_price):
     """
@@ -891,7 +1000,6 @@ def get_gemini_exposure_tier(config, market, has_open_orders):
         "reason": "BTC is not above MA7. Fresh buy blocked.",
     }
 
-
 def get_tiered_max_buy_usdt(exposure_tier, has_open_orders):
     if not exposure_tier or not exposure_tier.get("can_buy", False):
         return 0.0
@@ -987,6 +1095,14 @@ def evaluate_manual_buy_anti_repeat(config, market, exposure_tier, candidate_act
 
     This guard runs before Gemini receives BUY candidate actions.
     It only blocks a new buy candidate. It does not affect sell/hold actions.
+
+    Bypass conditions (any one is enough to bypass cooldown):
+    1. Tier upgrade: early_confirmation -> confirmed_breakout
+    2. Breakout bypass: BTC rose > breakout_bypass_pct from last buy price
+    3. Crash bypass: BTC dropped > crash_bypass_pct from last buy price
+
+    BLOCK ONLY IF:
+    - same tier AND same thesis AND price move insignificant AND cooldown active
     """
     manual_exec_cfg = config.get("manual_executions", {})
     anti_cfg = manual_exec_cfg.get("anti_repeat", {})
@@ -997,6 +1113,7 @@ def evaluate_manual_buy_anti_repeat(config, market, exposure_tier, candidate_act
         "latest_buy": None,
         "hours_since_last_buy": None,
         "price_move_pct_from_last_buy": None,
+        "bypass_reason": None,
     }
 
     if not manual_exec_cfg.get("enabled", False):
@@ -1042,6 +1159,10 @@ def evaluate_manual_buy_anti_repeat(config, market, exposure_tier, candidate_act
         anti_cfg.get("allow_new_buy_if_tier_upgrades", True)
     )
 
+    # --- New bypass thresholds ---
+    bypass_rise_pct = float(anti_cfg.get("bypass_if_price_rise_from_last_buy_pct", 0) or 0)
+    bypass_drop_pct = float(anti_cfg.get("bypass_if_price_drop_from_last_buy_pct", 0) or 0)
+
     same_signal = (
         block_same_signal_key
         and last_signal_key
@@ -1055,22 +1176,51 @@ def evaluate_manual_buy_anti_repeat(config, market, exposure_tier, candidate_act
         and current_tier == last_tier
     )
 
+    # --- Bypass condition 1: tier upgrade ---
     tier_upgraded = (
         allow_new_buy_if_tier_upgrades
         and last_tier == "early_confirmation"
         and current_tier == "confirmed_breakout"
     )
 
-    meaningful_pullback = price_move_pct <= -abs(require_price_move_pct)
-
     if tier_upgraded:
+        result["bypass_reason"] = (
+            f"Cooldown bypassed: tier upgraded from {last_tier} to {current_tier}. "
+            f"Market thesis has changed."
+        )
         return result
+
+    # --- Bypass condition 2: significant breakout (price moved UP) ---
+    if bypass_rise_pct > 0 and price_move_pct >= bypass_rise_pct:
+        result["bypass_reason"] = (
+            f"Cooldown bypassed: BTC rose {price_move_pct:.2f}% from last buy "
+            f"(${last_buy_price:,.0f} -> ${current_price:,.0f}), "
+            f"exceeding bypass_if_price_rise_from_last_buy_pct threshold of {bypass_rise_pct:.1f}%. "
+            f"Market context has significantly changed."
+        )
+        return result
+
+    # --- Bypass condition 3: significant crash (price moved DOWN) ---
+    if bypass_drop_pct > 0 and price_move_pct <= -abs(bypass_drop_pct):
+        result["bypass_reason"] = (
+            f"Cooldown bypassed: BTC dropped {price_move_pct:.2f}% from last buy "
+            f"(${last_buy_price:,.0f} -> ${current_price:,.0f}), "
+            f"exceeding bypass_if_price_drop_from_last_buy_pct threshold of -{bypass_drop_pct:.1f}%. "
+            f"Discount is too significant to ignore."
+        )
+        return result
+
+    # --- Standard blocking logic (unchanged) ---
+    meaningful_pullback = price_move_pct <= -abs(require_price_move_pct)
 
     if same_signal and hours_since < cooldown_hours:
         result["blocked"] = True
         result["reason"] = (
             f"Manual buy anti-repeat: {candidate_action_key} was already executed "
-            f"{hours_since:.1f}h ago. Cooldown is {cooldown_hours:.1f}h."
+            f"{hours_since:.1f}h ago. Cooldown is {cooldown_hours:.1f}h. "
+            f"Price move from last buy: {price_move_pct:.2f}% "
+            f"(bypass requires >{bypass_rise_pct:.1f}% up or "
+            f">{bypass_drop_pct:.1f}% down or tier upgrade)."
         )
         return result
 
@@ -1080,7 +1230,7 @@ def evaluate_manual_buy_anti_repeat(config, market, exposure_tier, candidate_act
             f"Manual buy anti-repeat: last filled manual buy was also tier "
             f"{last_tier}. Current price move from last buy is {price_move_pct:.2f}%, "
             f"but same-tier repeat requires at least -{require_price_move_pct:.2f}% pullback "
-            f"or tier upgrade."
+            f"or tier upgrade or significant breakout/crash bypass."
         )
         return result
 
@@ -1115,7 +1265,6 @@ def get_active_manual_pullback_orders(config):
         active.append(entry)
 
     return active
-
 
 def get_highest_open_buy_order_price(config):
     manual_orders_cfg = config.get("manual_open_orders", {})
@@ -1467,7 +1616,6 @@ def calculate_sell_btc_for_target_pct(portfolio, market_price, target_btc_pct):
 
     sell_btc = btc_now - target_btc
     return max(sell_btc, 0.0)
-
 
 def is_bullish_confirmation_for_gemini_decision(config, market):
     """
@@ -2102,7 +2250,6 @@ def build_gemini_candidate_actions(config, market, portfolio, open_orders, intra
     })
 
     return actions
-
 
 def apply_gemini_decision_with_guards(
     config,
@@ -3491,7 +3638,6 @@ def salvage_gemini_decision_from_partial_json(raw_text, action_keys):
         ),
     }
 
-
 def generate_gemini_explanation(
     config,
     market,
@@ -3937,7 +4083,6 @@ def format_ai_review_from_json(ai_data):
         f"<b>Mental Note</b>\n"
         f"{esc(ai_data['mental_note'])}"
     )
-
 
 def clean_ai_explanation(text):
     """
