@@ -2717,51 +2717,118 @@ def build_rule_summary_for_llm(
 
 def salvage_gemini_decision_from_partial_json(raw_text, action_keys):
     """
-    Recover a minimal Gemini decision from a truncated JSON response.
+    Recover a minimal Gemini decision from malformed or truncated JSON.
 
-    This is intentionally conservative:
-    - only recovers if recommended_action_key is present and allowed,
-    - only recovers numeric buy/sell/confidence fields,
-    - analyst text is replaced with a warning that the JSON was partial.
+    Conservative recovery rules:
+    - Recover only if an allowed action key is clearly present.
+    - Prefer explicit JSON fields if available.
+    - If Gemini rambles before JSON, recover only when the text contains
+      a recommendation-like phrase near an allowed action key.
+    - Buy/sell/confidence still go through deterministic risk guards later.
     """
     if not raw_text:
         return None
 
-    action_match = re.search(
-        r'"recommended_action_key"\s*:\s*"([^"]+)"',
-        raw_text,
-    )
-
-    if not action_match:
-        return None
-
-    action_key = action_match.group(1)
-
-    if action_key not in action_keys:
-        return None
+    text = str(raw_text)
 
     def extract_number(field_name, default=0.0):
         pattern = rf'"{re.escape(field_name)}"\s*:\s*([-+]?\d+(?:\.\d+)?)'
-        match = re.search(pattern, raw_text)
-        if not match:
-            return default
+        match = re.search(pattern, text)
+        if match:
+            try:
+                return float(match.group(1))
+            except Exception:
+                return default
 
-        try:
-            return float(match.group(1))
-        except Exception:
-            return default
+        loose_patterns = [
+            rf"{re.escape(field_name)}\s*(?:is|=|:)?\s*([-+]?\d+(?:\.\d+)?)",
+            rf"{re.escape(field_name.replace('_', ' '))}\s*(?:is|=|:)?\s*([-+]?\d+(?:\.\d+)?)",
+        ]
+
+        for loose_pattern in loose_patterns:
+            loose_match = re.search(loose_pattern, text, flags=re.IGNORECASE)
+            if loose_match:
+                try:
+                    return float(loose_match.group(1))
+                except Exception:
+                    return default
+
+        return default
 
     def extract_string(field_name, default=""):
         pattern = rf'"{re.escape(field_name)}"\s*:\s*"([^"]*)"'
-        match = re.search(pattern, raw_text)
+        match = re.search(pattern, text)
         if not match:
             return default
 
         return match.group(1)
 
+    explicit_action_match = re.search(
+        r'"recommended_action_key"\s*:\s*"([^"]+)"',
+        text,
+    )
+
+    action_key = None
+
+    if explicit_action_match:
+        candidate_key = explicit_action_match.group(1)
+        if candidate_key in action_keys:
+            action_key = candidate_key
+
+    if action_key is None:
+        recommendation_markers = [
+            "i recommended",
+            "recommended",
+            "selected action",
+            "choose",
+            "chosen action",
+            "final action",
+        ]
+
+        lower_text = text.lower()
+        has_recommendation_marker = any(marker in lower_text for marker in recommendation_markers)
+
+        if not has_recommendation_marker:
+            return None
+
+        matched_keys = [
+            key for key in action_keys
+            if key and key in text
+        ]
+
+        # Conservative: if multiple allowed action keys are mentioned,
+        # do not guess which one was intended.
+        if len(matched_keys) != 1:
+            return None
+
+        action_key = matched_keys[0]
+
+    if action_key not in action_keys:
+        return None
+
     recommended_buy = extract_number("recommended_buy_usdt", 0.0)
     recommended_sell_pct = extract_number("recommended_sell_btc_pct_of_holdings", 0.0)
     confidence_score = extract_number("confidence_score", 0.0)
+
+    # Extra fallback for common malformed text:
+    # "I recommended 15.0" or "buy 15 USDT"
+    if recommended_buy <= 0 and action_key.startswith("BUY"):
+        buy_match = re.search(
+            r"(?:buy|recommended)\s+(?:btc\s+worth\s+)?([-+]?\d+(?:\.\d+)?)\s*(?:usdt|usd)?",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if buy_match:
+            try:
+                recommended_buy = float(buy_match.group(1))
+            except Exception:
+                recommended_buy = 0.0
+
+    # If confidence is missing, keep it at 0.
+    # This means buy/sell will be blocked by guard unless confidence was visible.
+    if 0 <= confidence_score <= 1:
+        confidence_score *= 100
+
     agreement = extract_string("agreement_with_rule", "cautious_agree")
 
     return {
@@ -2769,10 +2836,10 @@ def salvage_gemini_decision_from_partial_json(raw_text, action_keys):
         "recommended_buy_usdt": recommended_buy,
         "recommended_sell_btc_pct_of_holdings": recommended_sell_pct,
         "agreement_with_rule": agreement,
-        "confidence_score": confidence_score,
+        "confidence_score": int(round(confidence_score)),
         "market_thesis": (
-            "Gemini returned a partial JSON response. The machine-readable action fields "
-            "were recovered, but the full market thesis was incomplete."
+            "Gemini returned malformed or partial JSON. The machine-readable action fields "
+            "were recovered from the response text, but the full market thesis was incomplete."
         ),
         "portfolio_diagnosis": (
             "Use the deterministic portfolio section above as the source of truth."
@@ -2782,17 +2849,18 @@ def salvage_gemini_decision_from_partial_json(raw_text, action_keys):
             "affecting final decision."
         ),
         "risk_assessment": (
-            "Partial Gemini output is treated cautiously. No action is allowed unless the "
-            "recommended action key exists in allowed candidate actions."
+            "Malformed Gemini output is treated cautiously. No action is allowed unless the "
+            "recommended action key exists in allowed candidate actions and confidence/exposure "
+            "guards pass."
         ),
         "suggested_manual_plan": (
             "Follow the final Decision section only. The bot remains manual-only."
         ),
         "invalidation": (
-            "If Gemini repeatedly returns partial JSON, reduce output size or use fallback model."
+            "If Gemini repeatedly returns malformed JSON, reduce output size or route to a fallback model."
         ),
         "mental_note": (
-            "Partial AI output is not automatically trusted; risk guards still decide."
+            "Malformed AI output is not automatically trusted; deterministic guards still decide."
         ),
     }
 
@@ -2989,6 +3057,10 @@ Return ONLY valid JSON.
 No Markdown.
 No HTML.
 No code fences.
+Do not write analysis before the JSON.
+Do not write reasoning outside the JSON.
+Do not write "wait", "let's check", or any self-dialogue.
+Start your response with {{ and end your response with }}.
 
 Use exactly this schema:
 {{
