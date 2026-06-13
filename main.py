@@ -3056,11 +3056,8 @@ Data:
 
         data = response.json()
 
-        if use_grounding:
-            try:
-                record_grounding_usage(config)
-            except TypeError:
-                record_grounding_usage()
+        # Grounding usage is already recorded by record_llm_model_usage(...)
+        # when use_grounding=True. Do not call record_grounding_usage() here.
 
         candidates = data.get("candidates", [])
         if not candidates:
