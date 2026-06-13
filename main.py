@@ -1649,11 +1649,37 @@ def build_gemini_candidate_actions(config, market, portfolio, open_orders, intra
     )
 
     if upside_pct > max_upside_pct:
-        print("[BUY_GATE] blocked: upside exposure cap exceeded", flush=True)
         return actions
 
     if downside_planned_pct > max_downside_pct:
-        print("[BUY_GATE] blocked: downside planned exposure cap exceeded", flush=True)
+        return actions
+
+    anti_repeat = evaluate_manual_buy_anti_repeat(
+        config=config,
+        market=market,
+        exposure_tier=exposure_tier,
+        candidate_action_key="BUY_SMALL_CONFIRMATION_WITH_LADDER",
+    )
+
+    if anti_repeat.get("blocked", False):
+        print(
+            "[BUY_GATE] blocked by manual execution anti-repeat | "
+            f"reason={anti_repeat.get('reason')}",
+            flush=True,
+        )
+
+        actions.append({
+            "key": "HOLD_RECENT_MANUAL_BUY_ANTI_REPEAT",
+            "type": "hold",
+            "signal": "HOLD / RECENT MANUAL BUY ANTI-REPEAT",
+            "max_buy_usdt": 0,
+            "max_sell_btc_pct_of_holdings": 0,
+            "latest_manual_buy": anti_repeat.get("latest_buy"),
+            "hours_since_last_buy": anti_repeat.get("hours_since_last_buy"),
+            "price_move_pct_from_last_buy": anti_repeat.get("price_move_pct_from_last_buy"),
+            "reason": anti_repeat.get("reason"),
+        })
+
         return actions
 
     actions.append({
@@ -1675,15 +1701,6 @@ def build_gemini_candidate_actions(config, market, portfolio, open_orders, intra
             f"Downside planned BTC allocation if open orders fill: {downside_planned_pct:.1f}% / cap {max_downside_pct:.1f}%."
         ),
     })
-
-    print(
-        "[BUY_GATE] allowed: BUY_SMALL_CONFIRMATION_WITH_LADDER added | "
-        f"max_buy={max_buy:.2f} | "
-        f"tier={exposure_tier.get('name')} | "
-        f"upside_pct={upside_pct:.2f} | "
-        f"downside_planned_pct={downside_planned_pct:.2f}",
-        flush=True,
-    )
 
     return actions
 
@@ -3681,6 +3698,21 @@ def format_action_key_line(action):
     max_buy = float(action.get("max_buy_usdt", 0) or 0)
     max_sell_pct = float(action.get("max_sell_btc_pct_of_holdings", 0) or 0)
 
+    if key == "HOLD_RECENT_MANUAL_BUY_ANTI_REPEAT":
+        hours_since = action.get("hours_since_last_buy")
+        price_move = action.get("price_move_pct_from_last_buy")
+
+        details = []
+
+        if hours_since is not None:
+            details.append(f"{float(hours_since):.1f}h since last buy")
+
+        if price_move is not None:
+            details.append(f"{float(price_move):.2f}% from last buy")
+
+        suffix = f" | {', '.join(details)}" if details else ""
+        return f"- {key}{suffix}"
+
     if action_type == "buy":
         tier = action.get("exposure_tier", "-")
         return f"- {key} | buy up to {max_buy:.2f} USDT | tier: {tier}"
@@ -3754,6 +3786,12 @@ def format_guardrail_check(config, market, portfolio, base_decision,
 
     buy_candidate = find_buy_candidate(candidate_actions)
 
+    anti_repeat_action = None
+    for action in candidate_actions or []:
+        if action.get("key") == "HOLD_RECENT_MANUAL_BUY_ANTI_REPEAT":
+            anti_repeat_action = action
+            break
+
     if buy_candidate:
         buy_gate_status = "open"
         exposure_tier = buy_candidate.get("exposure_tier", "-")
@@ -3765,6 +3803,9 @@ def format_guardrail_check(config, market, portfolio, base_decision,
             f"Upside BTC allocation after buy: {upside_pct:.1f}%\n"
             f"Downside planned BTC allocation if open orders fill: {downside_pct:.1f}%"
         )
+    elif anti_repeat_action:
+        buy_gate_status = "closed by manual execution anti-repeat"
+        exposure_text = anti_repeat_action.get("reason", "Recent manual buy already executed.")
     else:
         buy_gate_status = "closed"
         exposure_text = "Exposure tier: no buy candidate"
