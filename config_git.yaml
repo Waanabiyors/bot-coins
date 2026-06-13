@@ -225,6 +225,54 @@ manual_execution:
   max_acceptable_market_spread_pct: 0.10
   limit_expiry_guidance_minutes: 15
 
+adaptive_pullback_limit:
+  enabled: true
+
+  # Candidate action key that Gemini may choose.
+  action_key: "PLACE_PULLBACK_LIMIT_BUY"
+
+  # Manual-only. Bot only recommends a limit order; it never places it.
+  manual_only: true
+
+  # Only one adaptive pullback order should exist at a time.
+  block_if_active_pullback_order_exists: true
+  max_active_pullback_orders: 1
+
+  # Allow this candidate even when existing 58k/60k ladder orders are active,
+  # but still count everything into planned exposure.
+  allow_with_open_orders: true
+
+  # Order size. Keep small because this is adaptive exposure, not a new big ladder.
+  max_order_usdt_with_open_orders: 15
+  max_order_usdt_without_open_orders: 20
+
+  # For recent manual buy anti-repeat:
+  # Pullback limit may still be allowed, but only if the suggested limit price
+  # is meaningfully below the last filled manual buy.
+  require_limit_below_last_manual_buy_pct: 2.0
+
+  # Limit price offset from current market price by tier.
+  # Example: BTC 64,000 and early_confirmation offset 1.25% => limit around 63,200.
+  limit_offset_pct_from_current:
+    early_confirmation: 1.25
+    confirmed_breakout: 1.75
+
+  min_limit_offset_pct_from_current: 0.75
+  max_limit_offset_pct_from_current: 3.00
+
+  # Keep pullback limit above the old deep ladder by a reasonable gap,
+  # so it is an adaptive pullback entry, not a duplicate of 58k/60k.
+  min_gap_above_highest_open_buy_pct: 2.0
+
+  # Reserve and exposure guards.
+  min_usdt_free_after_order: 150
+  max_upside_btc_pct_after_fill: 35
+  max_downside_planned_btc_pct_after_fill: 55
+  min_confidence_to_place: 85
+
+  # Telegram guidance only.
+  expiry_guidance_hours: 24
+
 safety:
   allow_trading: false
   allow_withdrawal: false

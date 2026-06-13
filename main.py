@@ -1086,6 +1086,345 @@ def evaluate_manual_buy_anti_repeat(config, market, exposure_tier, candidate_act
 
     return result
 
+def get_active_manual_pullback_orders(config):
+    manual_exec_cfg = config.get("manual_executions", {})
+    entries = manual_exec_cfg.get("entries", [])
+
+    if not manual_exec_cfg.get("enabled", False):
+        return []
+
+    if not isinstance(entries, list):
+        return []
+
+    active = []
+
+    for entry in entries:
+        status = str(entry.get("status", "")).lower()
+        side = str(entry.get("side", "")).lower()
+        source_signal_key = str(entry.get("source_signal_key", ""))
+
+        if status != "open":
+            continue
+
+        if side != "buy":
+            continue
+
+        if source_signal_key != "PLACE_PULLBACK_LIMIT_BUY":
+            continue
+
+        active.append(entry)
+
+    return active
+
+
+def get_highest_open_buy_order_price(config):
+    manual_orders_cfg = config.get("manual_open_orders", {})
+
+    if not manual_orders_cfg.get("enabled", False):
+        return 0.0
+
+    prices = []
+
+    for order in manual_orders_cfg.get("orders", []):
+        if order.get("status") != "open":
+            continue
+
+        side = str(order.get("side", "")).lower()
+        if side != "buy":
+            continue
+
+        price = float(order.get("price", 0) or 0)
+        if price > 0:
+            prices.append(price)
+
+    if not prices:
+        return 0.0
+
+    return max(prices)
+
+
+def calculate_btc_pct_after_limit_buy(portfolio, current_price, limit_price, buy_usdt):
+    btc_now = float(portfolio.get("btc", 0) or 0)
+    total_value = float(portfolio.get("total_value", 0) or 0)
+
+    if current_price <= 0 or limit_price <= 0 or total_value <= 0 or buy_usdt <= 0:
+        return 0.0
+
+    extra_btc = buy_usdt / limit_price
+    btc_value_after_fill = (btc_now + extra_btc) * current_price
+
+    return btc_value_after_fill / total_value * 100
+
+
+def calculate_planned_btc_exposure_pct_for_limit_buy(config, portfolio, current_price, limit_price, buy_usdt):
+    manual_orders_cfg = config.get("manual_open_orders", {})
+    open_order_btc = 0.0
+
+    if manual_orders_cfg.get("enabled", False):
+        for order in manual_orders_cfg.get("orders", []):
+            if order.get("status") != "open":
+                continue
+
+            side = str(order.get("side", "")).lower()
+            if side != "buy":
+                continue
+
+            amount = float(order.get("amount", 0) or 0)
+            open_order_btc += amount
+
+    extra_btc = 0.0
+    if limit_price > 0 and buy_usdt > 0:
+        extra_btc = buy_usdt / limit_price
+
+    planned_btc = float(portfolio.get("btc", 0) or 0) + open_order_btc + extra_btc
+    planned_btc_value = planned_btc * current_price
+
+    total_value = float(portfolio.get("total_value", 0) or 0)
+    if total_value <= 0:
+        return 0.0
+
+    return planned_btc_value / total_value * 100
+
+
+def build_pullback_limit_candidate_action(
+    config,
+    market,
+    portfolio,
+    open_orders,
+    exposure_tier,
+    has_open_orders,
+    anti_repeat=None,
+):
+    """
+    Build adaptive manual pullback limit candidate.
+
+    This does not place any order.
+    It only allows Gemini to recommend a manual limit order below current price.
+
+    Purpose:
+    - Make recommendations more adaptive when old ladder orders are far below current price.
+    - Avoid repeated immediate buys.
+    - Avoid chasing by requiring a real pullback limit below current price.
+    """
+    pullback_cfg = config.get("adaptive_pullback_limit", {})
+
+    if not pullback_cfg.get("enabled", False):
+        return None
+
+    if not pullback_cfg.get("manual_only", True):
+        return None
+
+    if has_open_orders and not pullback_cfg.get("allow_with_open_orders", True):
+        return None
+
+    if not exposure_tier or not exposure_tier.get("can_buy", False):
+        return None
+
+    action_key = pullback_cfg.get("action_key", "PLACE_PULLBACK_LIMIT_BUY")
+
+    active_pullback_orders = get_active_manual_pullback_orders(config)
+
+    if pullback_cfg.get("block_if_active_pullback_order_exists", True):
+        max_active = int(pullback_cfg.get("max_active_pullback_orders", 1) or 1)
+
+        if len(active_pullback_orders) >= max_active:
+            return {
+                "key": "HOLD_ACTIVE_PULLBACK_LIMIT_EXISTS",
+                "type": "hold",
+                "signal": "HOLD / ACTIVE PULLBACK LIMIT EXISTS",
+                "max_buy_usdt": 0,
+                "max_sell_btc_pct_of_holdings": 0,
+                "active_pullback_order_count": len(active_pullback_orders),
+                "reason": (
+                    f"Adaptive pullback limit is blocked because {len(active_pullback_orders)} "
+                    f"active pullback limit order already exists in manual_executions."
+                ),
+            }
+
+    price = float(market.get("price", 0) or 0)
+    if price <= 0:
+        return None
+
+    tier_name = str(exposure_tier.get("name", ""))
+    offset_cfg = pullback_cfg.get("limit_offset_pct_from_current", {})
+
+    if isinstance(offset_cfg, dict):
+        offset_pct = float(offset_cfg.get(tier_name, offset_cfg.get("early_confirmation", 1.25)) or 1.25)
+    else:
+        offset_pct = float(offset_cfg or 1.25)
+
+    min_offset = float(pullback_cfg.get("min_limit_offset_pct_from_current", 0.75) or 0.75)
+    max_offset = float(pullback_cfg.get("max_limit_offset_pct_from_current", 3.00) or 3.00)
+
+    offset_pct = max(min_offset, min(offset_pct, max_offset))
+
+    suggested_limit_price = price * (1 - offset_pct / 100)
+
+    latest_buy = get_latest_filled_manual_buy(config)
+    required_below_last_buy_pct = float(
+        pullback_cfg.get("require_limit_below_last_manual_buy_pct", 2.0) or 2.0
+    )
+
+    if latest_buy:
+        last_buy_price = float(latest_buy.get("_avg_fill_price_usdt", 0) or 0)
+
+        if last_buy_price > 0:
+            max_allowed_from_last_buy = last_buy_price * (1 - required_below_last_buy_pct / 100)
+
+            if suggested_limit_price > max_allowed_from_last_buy:
+                suggested_limit_price = max_allowed_from_last_buy
+
+    highest_open_buy = get_highest_open_buy_order_price(config)
+    min_gap_above_highest_open_buy_pct = float(
+        pullback_cfg.get("min_gap_above_highest_open_buy_pct", 2.0) or 2.0
+    )
+
+    if highest_open_buy > 0:
+        minimum_allowed_price = highest_open_buy * (1 + min_gap_above_highest_open_buy_pct / 100)
+
+        if suggested_limit_price <= minimum_allowed_price:
+            return {
+                "key": "HOLD_PULLBACK_LIMIT_TOO_CLOSE_TO_OLD_LADDER",
+                "type": "hold",
+                "signal": "HOLD / PULLBACK LIMIT TOO CLOSE TO OLD LADDER",
+                "max_buy_usdt": 0,
+                "max_sell_btc_pct_of_holdings": 0,
+                "highest_open_buy_price": highest_open_buy,
+                "minimum_allowed_price": minimum_allowed_price,
+                "suggested_limit_price": suggested_limit_price,
+                "reason": (
+                    f"Adaptive pullback limit is blocked because suggested limit "
+                    f"${suggested_limit_price:,.0f} is too close to existing highest ladder "
+                    f"${highest_open_buy:,.0f}. Minimum allowed is ${minimum_allowed_price:,.0f}."
+                ),
+            }
+
+    if has_open_orders:
+        order_usdt = float(pullback_cfg.get("max_order_usdt_with_open_orders", 15) or 15)
+    else:
+        order_usdt = float(pullback_cfg.get("max_order_usdt_without_open_orders", 20) or 20)
+
+    if order_usdt <= 0:
+        return None
+
+    min_free = float(
+        pullback_cfg.get(
+            "min_usdt_free_after_order",
+            config.get("gemini_decision", {}).get("min_usdt_free_after_buy", 150),
+        ) or 150
+    )
+
+    if portfolio["usdt_free"] - order_usdt < min_free:
+        return {
+            "key": "HOLD_PULLBACK_LIMIT_BLOCKED_BY_RESERVE",
+            "type": "hold",
+            "signal": "HOLD / PULLBACK LIMIT BLOCKED BY RESERVE",
+            "max_buy_usdt": 0,
+            "max_sell_btc_pct_of_holdings": 0,
+            "reason": (
+                f"Adaptive pullback limit is blocked because placing {order_usdt:.2f} USDT "
+                f"would reduce USDT free balance below reserve {min_free:.2f}."
+            ),
+        }
+
+    upside_pct_after_fill = calculate_btc_pct_after_limit_buy(
+        portfolio=portfolio,
+        current_price=price,
+        limit_price=suggested_limit_price,
+        buy_usdt=order_usdt,
+    )
+
+    downside_planned_pct_after_fill = calculate_planned_btc_exposure_pct_for_limit_buy(
+        config=config,
+        portfolio=portfolio,
+        current_price=price,
+        limit_price=suggested_limit_price,
+        buy_usdt=order_usdt,
+    )
+
+    tier_settings = exposure_tier.get("settings", {})
+
+    max_upside_pct = float(
+        pullback_cfg.get(
+            "max_upside_btc_pct_after_fill",
+            tier_settings.get("max_upside_btc_pct_after_buy", 35),
+        ) or 35
+    )
+
+    max_downside_pct = float(
+        pullback_cfg.get(
+            "max_downside_planned_btc_pct_after_fill",
+            tier_settings.get("max_downside_planned_btc_pct", 55),
+        ) or 55
+    )
+
+    if upside_pct_after_fill > max_upside_pct:
+        return {
+            "key": "HOLD_PULLBACK_LIMIT_BLOCKED_BY_UPSIDE_EXPOSURE",
+            "type": "hold",
+            "signal": "HOLD / PULLBACK LIMIT BLOCKED BY UPSIDE EXPOSURE",
+            "max_buy_usdt": 0,
+            "max_sell_btc_pct_of_holdings": 0,
+            "upside_btc_pct_after_fill": upside_pct_after_fill,
+            "max_upside_btc_pct_after_fill": max_upside_pct,
+            "reason": (
+                f"Adaptive pullback limit is blocked because BTC allocation after fill "
+                f"would be {upside_pct_after_fill:.1f}%, above cap {max_upside_pct:.1f}%."
+            ),
+        }
+
+    if downside_planned_pct_after_fill > max_downside_pct:
+        return {
+            "key": "HOLD_PULLBACK_LIMIT_BLOCKED_BY_DOWNSIDE_PLANNED_EXPOSURE",
+            "type": "hold",
+            "signal": "HOLD / PULLBACK LIMIT BLOCKED BY DOWNSIDE PLANNED EXPOSURE",
+            "max_buy_usdt": 0,
+            "max_sell_btc_pct_of_holdings": 0,
+            "downside_planned_btc_pct_after_fill": downside_planned_pct_after_fill,
+            "max_downside_planned_btc_pct_after_fill": max_downside_pct,
+            "reason": (
+                f"Adaptive pullback limit is blocked because downside planned BTC allocation "
+                f"would be {downside_planned_pct_after_fill:.1f}%, above cap {max_downside_pct:.1f}%."
+            ),
+        }
+
+    min_confidence = int(
+        pullback_cfg.get(
+            "min_confidence_to_place",
+            tier_settings.get("min_confidence_to_buy", config.get("gemini_decision", {}).get("min_confidence_to_buy", 80)),
+        )
+    )
+
+    estimated_btc_if_filled = order_usdt / suggested_limit_price if suggested_limit_price > 0 else 0
+
+    return {
+        "key": action_key,
+        "type": "buy",
+        "order_style": "pullback_limit",
+        "signal": "PLACE MANUAL LIMIT BUY / PULLBACK ENTRY",
+        "max_buy_usdt": order_usdt,
+        "max_sell_btc_pct_of_holdings": 0,
+        "recommended_order_type": "limit",
+        "recommended_limit_price": suggested_limit_price,
+        "pullback_offset_pct_from_current": ((price - suggested_limit_price) / price * 100),
+        "estimated_btc_if_filled": estimated_btc_if_filled,
+        "expiry_guidance_hours": int(pullback_cfg.get("expiry_guidance_hours", 24) or 24),
+        "exposure_tier": tier_name,
+        "tier_reason": exposure_tier.get("reason"),
+        "min_confidence_to_buy": min_confidence,
+        "max_upside_btc_pct_after_buy": max_upside_pct,
+        "max_downside_planned_btc_pct": max_downside_pct,
+        "upside_btc_pct_after_buy": upside_pct_after_fill,
+        "downside_planned_btc_pct_after_buy_and_open_orders": downside_planned_pct_after_fill,
+        "reason": (
+            f"Adaptive pullback limit is allowed under {tier_name} tier. "
+            f"Place a manual limit buy only if BTC pulls back to approximately "
+            f"${suggested_limit_price:,.0f}. "
+            f"Upside BTC allocation after fill: {upside_pct_after_fill:.1f}% / cap {max_upside_pct:.1f}%. "
+            f"Downside planned BTC allocation if open orders fill: {downside_planned_pct_after_fill:.1f}% / cap {max_downside_pct:.1f}%."
+        ),
+    }
+
 def calculate_btc_pct_after_sell(portfolio, market_price, sell_btc):
     btc_now = float(portfolio.get("btc", 0) or 0)
     usdt_now = float(portfolio.get("usdt", 0) or 0)
@@ -1680,7 +2019,67 @@ def build_gemini_candidate_actions(config, market, portfolio, open_orders, intra
             "reason": anti_repeat.get("reason"),
         })
 
+        pullback_action = build_pullback_limit_candidate_action(
+            config=config,
+            market=market,
+            portfolio=portfolio,
+            open_orders=open_orders,
+            exposure_tier=exposure_tier,
+            has_open_orders=has_open_orders,
+            anti_repeat=anti_repeat,
+        )
+
+        if pullback_action:
+            print(
+                "[BUY_GATE] adaptive pullback candidate after anti-repeat | "
+                f"key={pullback_action.get('key')} | "
+                f"limit={pullback_action.get('recommended_limit_price')}",
+                flush=True,
+            )
+            actions.append(pullback_action)
+
         return actions
+
+    actions.append({
+        "key": "BUY_SMALL_CONFIRMATION_WITH_LADDER",
+        "type": "buy",
+        "signal": "BUY SMALL / BULLISH CONFIRMATION WITH LADDER ACTIVE",
+        "max_buy_usdt": max_buy,
+        "max_sell_btc_pct_of_holdings": 0,
+        "exposure_tier": exposure_tier.get("name"),
+        "tier_reason": exposure_tier.get("reason"),
+        "min_confidence_to_buy": tier_min_confidence,
+        "max_upside_btc_pct_after_buy": max_upside_pct,
+        "max_downside_planned_btc_pct": max_downside_pct,
+        "upside_btc_pct_after_buy": upside_pct,
+        "downside_planned_btc_pct_after_buy_and_open_orders": downside_planned_pct,
+        "reason": (
+            f"Tiered exposure policy allows a small buy under {exposure_tier.get('name')} tier. "
+            f"Upside BTC allocation after buy: {upside_pct:.1f}% / cap {max_upside_pct:.1f}%. "
+            f"Downside planned BTC allocation if open orders fill: {downside_planned_pct:.1f}% / cap {max_downside_pct:.1f}%."
+        ),
+    })
+
+    pullback_action = build_pullback_limit_candidate_action(
+        config=config,
+        market=market,
+        portfolio=portfolio,
+        open_orders=open_orders,
+        exposure_tier=exposure_tier,
+        has_open_orders=has_open_orders,
+        anti_repeat=anti_repeat,
+    )
+
+    if pullback_action:
+        print(
+            "[BUY_GATE] adaptive pullback candidate added | "
+            f"key={pullback_action.get('key')} | "
+            f"limit={pullback_action.get('recommended_limit_price')}",
+            flush=True,
+        )
+        actions.append(pullback_action)
+
+    return actions
 
     actions.append({
         "key": "BUY_SMALL_CONFIRMATION_WITH_LADDER",
@@ -1825,7 +2224,7 @@ def apply_gemini_decision_with_guards(
                 ),
             }
 
-        return {
+        decision_result = {
             "signal": selected_action["signal"],
             "action_usdt": buy_usdt,
             "reason": (
@@ -1835,6 +2234,29 @@ def apply_gemini_decision_with_guards(
                 f"Downside planned BTC allocation if open orders fill: {downside_planned_pct:.1f}%."
             ),
         }
+
+        if selected_action.get("order_style") == "pullback_limit":
+            limit_price = float(selected_action.get("recommended_limit_price", 0) or 0)
+            estimated_btc = float(selected_action.get("estimated_btc_if_filled", 0) or 0)
+
+            decision_result.update({
+                "order_style": "pullback_limit",
+                "recommended_order_type": "limit",
+                "recommended_limit_price": limit_price,
+                "estimated_btc_if_filled": estimated_btc,
+                "expiry_guidance_hours": selected_action.get("expiry_guidance_hours"),
+                "reason": (
+                    f"Gemini selected {action_key} with {confidence}/100 confidence. "
+                    f"Risk guard approved an adaptive manual pullback limit under "
+                    f"{selected_action.get('exposure_tier', 'unknown')} tier. "
+                    f"Recommended manual limit: {buy_usdt:.2f} USDT @ ${limit_price:,.0f}. "
+                    f"Estimated BTC if filled: {estimated_btc:.8f}. "
+                    f"BTC allocation after fill: {upside_pct:.1f}%. "
+                    f"Downside planned BTC allocation if all buy orders fill: {downside_planned_pct:.1f}%."
+                ),
+            })
+
+        return decision_result
 
     if action_type == "sell":
         min_confidence = int(decision_cfg.get("min_confidence_to_sell", 80))
@@ -1983,6 +2405,12 @@ def format_decision_action(decision):
         return (
             f"Sell estimate: {decision.get('sell_btc', 0):.8f} BTC "
             f"(~{decision.get('sell_usdt_estimate', 0):.2f} USDT)"
+        )
+
+    if decision.get("order_style") == "pullback_limit":
+        return (
+            f"Limit buy: {decision.get('action_usdt', 0):.2f} USDT "
+            f"@ ${float(decision.get('recommended_limit_price', 0) or 0):,.0f}"
         )
 
     return f"{decision.get('action_usdt', 0):.2f} USDT"
@@ -3713,6 +4141,11 @@ def format_action_key_line(action):
         suffix = f" | {', '.join(details)}" if details else ""
         return f"- {key}{suffix}"
 
+    if key == "PLACE_PULLBACK_LIMIT_BUY":
+        limit_price = float(action.get("recommended_limit_price", 0) or 0)
+        tier = action.get("exposure_tier", "-")
+        return f"- {key} | limit buy {max_buy:.2f} USDT @ ${limit_price:,.0f} | tier: {tier}"
+
     if action_type == "buy":
         tier = action.get("exposure_tier", "-")
         return f"- {key} | buy up to {max_buy:.2f} USDT | tier: {tier}"
@@ -3737,6 +4170,14 @@ def format_allowed_actions(candidate_actions):
 def find_buy_candidate(candidate_actions):
     for action in candidate_actions or []:
         if action.get("key") == "BUY_SMALL_CONFIRMATION_WITH_LADDER":
+            return action
+
+    return None
+
+
+def find_pullback_limit_candidate(candidate_actions):
+    for action in candidate_actions or []:
+        if action.get("key") == "PLACE_PULLBACK_LIMIT_BUY":
             return action
 
     return None
@@ -3785,6 +4226,7 @@ def format_guardrail_check(config, market, portfolio, base_decision,
         allocation_status = "within target"
 
     buy_candidate = find_buy_candidate(candidate_actions)
+    pullback_candidate = find_pullback_limit_candidate(candidate_actions)
 
     anti_repeat_action = None
     for action in candidate_actions or []:
@@ -3802,6 +4244,35 @@ def format_guardrail_check(config, market, portfolio, base_decision,
             f"Exposure tier: {exposure_tier}\n"
             f"Upside BTC allocation after buy: {upside_pct:.1f}%\n"
             f"Downside planned BTC allocation if open orders fill: {downside_pct:.1f}%"
+        )
+    elif pullback_candidate and anti_repeat_action:
+        buy_gate_status = "immediate buy closed; pullback limit available"
+        exposure_tier = pullback_candidate.get("exposure_tier", "-")
+        limit_price = float(pullback_candidate.get("recommended_limit_price", 0) or 0)
+        order_usdt = float(pullback_candidate.get("max_buy_usdt", 0) or 0)
+        upside_pct = pullback_candidate.get("upside_btc_pct_after_buy")
+        downside_pct = pullback_candidate.get("downside_planned_btc_pct_after_buy_and_open_orders")
+
+        exposure_text = (
+            f"{anti_repeat_action.get('reason', 'Recent manual buy already executed.')}\n"
+            f"Adaptive pullback candidate: limit buy {order_usdt:.2f} USDT @ ${limit_price:,.0f}\n"
+            f"Exposure tier: {exposure_tier}\n"
+            f"BTC allocation after pullback fill: {upside_pct:.1f}%\n"
+            f"Downside planned BTC allocation if all orders fill: {downside_pct:.1f}%"
+        )
+    elif pullback_candidate:
+        buy_gate_status = "adaptive pullback limit available"
+        exposure_tier = pullback_candidate.get("exposure_tier", "-")
+        limit_price = float(pullback_candidate.get("recommended_limit_price", 0) or 0)
+        order_usdt = float(pullback_candidate.get("max_buy_usdt", 0) or 0)
+        upside_pct = pullback_candidate.get("upside_btc_pct_after_buy")
+        downside_pct = pullback_candidate.get("downside_planned_btc_pct_after_buy_and_open_orders")
+
+        exposure_text = (
+            f"Adaptive pullback candidate: limit buy {order_usdt:.2f} USDT @ ${limit_price:,.0f}\n"
+            f"Exposure tier: {exposure_tier}\n"
+            f"BTC allocation after pullback fill: {upside_pct:.1f}%\n"
+            f"Downside planned BTC allocation if all orders fill: {downside_pct:.1f}%"
         )
     elif anti_repeat_action:
         buy_gate_status = "closed by manual execution anti-repeat"
@@ -3859,6 +4330,25 @@ def format_manual_execution_plan(config, market, decision):
     )
 
     market_price = float(market.get("price", 0) or 0)
+
+    if decision.get("order_style") == "pullback_limit" and action_usdt > 0:
+        limit_price = float(decision.get("recommended_limit_price", 0) or 0)
+        estimated_btc = float(decision.get("estimated_btc_if_filled", 0) or 0)
+        expiry_hours = decision.get("expiry_guidance_hours", 24)
+
+        return (
+            f"Manual plan: place a LIMIT BUY order only.\n"
+            f"Order size: {action_usdt:.2f} USDT.\n"
+            f"Limit price: ${limit_price:,.0f}.\n"
+            f"Estimated BTC if filled: {estimated_btc:.8f} BTC.\n"
+            f"This is a pullback entry, not an immediate buy.\n"
+            f"Do not market buy this signal.\n"
+            f"Do not exceed the recommended size.\n"
+            f"Do not place another adaptive pullback order while this one is open.\n"
+            f"If placed, add it to manual_open_orders and manual_executions with status: open.\n"
+            f"If not filled within ~{expiry_hours}h, review it manually on the next bot reports.\n"
+            f"Do not cancel existing 58k/60k ladder orders unless you manually decide to revise the ladder."
+        )
 
     if "BUY" in signal and action_usdt > 0:
         estimated_btc = action_usdt / market_price if market_price > 0 else 0
