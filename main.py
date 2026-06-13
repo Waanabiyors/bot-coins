@@ -111,118 +111,6 @@ def split_telegram_message(message, limit=TELEGRAM_SAFE_MESSAGE_LIMIT):
 
     return chunks
 
-import os
-import json
-from datetime import datetime, timezone
-from zoneinfo import ZoneInfo
-import html
-import ccxt
-import pandas as pd
-import requests
-import yaml
-import re
-from dotenv import load_dotenv
-
-
-load_dotenv()
-
-
-#CONFIG_FILE = "config_git.yaml"
-CONFIG_FILE = os.getenv("BTC_AGENT_CONFIG", "config_git.yaml")
-
-# ============================================================
-# Safety guard
-# ============================================================
-
-def enforce_no_trading(config):
-    """
-    Hard safety gate.
-    Bot ini tidak boleh melakukan trading, cancel order, atau withdrawal.
-    Kalau config salah di-set, script langsung berhenti.
-    """
-    safety = config.get("safety", {})
-
-    if safety.get("allow_trading", False):
-        raise RuntimeError("Safety violation: allow_trading must remain false.")
-
-    if safety.get("allow_withdrawal", False):
-        raise RuntimeError("Safety violation: allow_withdrawal must remain false.")
-
-    if safety.get("allow_order_cancel", False):
-        raise RuntimeError("Safety violation: allow_order_cancel must remain false.")
-
-
-# ============================================================
-# Config and environment
-# ============================================================
-
-def load_config():
-    with open(CONFIG_FILE, "r", encoding="utf-8") as file:
-        return yaml.safe_load(file)
-
-
-def get_required_env(name):
-    value = os.getenv(name)
-    if not value:
-        raise ValueError(f"Missing required environment variable: {name}")
-    return value
-
-def esc(value):
-    return html.escape(str(value), quote=False)
-
-
-# ============================================================
-# Telegram
-# ============================================================
-
-TELEGRAM_SAFE_MESSAGE_LIMIT = 3800
-
-
-def strip_html_tags(text):
-    return re.sub(r"</?[^>]+>", "", str(text))
-
-
-def split_telegram_message(message, limit=TELEGRAM_SAFE_MESSAGE_LIMIT):
-    """
-    Split long Telegram messages safely.
-
-    Strategy:
-    - Prefer splitting by double-newline sections so HTML tags are less likely to break.
-    - If one section is still too long, strip HTML and split by hard character limit.
-    """
-    message = str(message)
-
-    if len(message) <= limit:
-        return [message]
-
-    sections = message.split("\n\n")
-    chunks = []
-    current = ""
-
-    for section in sections:
-        candidate = section if not current else current + "\n\n" + section
-
-        if len(candidate) <= limit:
-            current = candidate
-            continue
-
-        if current:
-            chunks.append(current)
-            current = ""
-
-        if len(section) <= limit:
-            current = section
-            continue
-
-        plain_section = strip_html_tags(section)
-
-        for start in range(0, len(plain_section), limit):
-            chunks.append(plain_section[start:start + limit])
-
-    if current:
-        chunks.append(current)
-
-    return chunks
 
 def send_telegram(message):
     bot_token = get_required_env("TELEGRAM_BOT_TOKEN")
@@ -374,6 +262,7 @@ def get_24h_ticker(symbol):
 
     return get_coingecko_price()
 
+
 def get_daily_klines(symbol, days=30):
     """
     Untuk historical daily data, kita pakai CoinGecko agar stabil.
@@ -517,6 +406,7 @@ def get_recent_intrahour_price_window(config):
             "rows": [],
         }
 
+
 def detect_intrahour_order_events(config, intrahour_window, current_price):
     """
     Detect whether recent CoinGecko prices touched configured manual open-order levels.
@@ -629,6 +519,7 @@ def detect_intrahour_order_events(config, intrahour_window, current_price):
         )
 
     return result
+
 
 def estimate_portfolio_if_touched_orders_filled(config, touched_orders, current_price):
     """
@@ -763,7 +654,6 @@ def adjust_decision_for_intrahour_order_events(config, decision, intrahour_order
             f"Verifikasi order di Tokocrypto dan update config_git.yaml sebelum keputusan baru."
         ),
     }
-
 
 def format_intrahour_order_events(intrahour_order_events):
     if not intrahour_order_events.get("enabled", False):
@@ -999,6 +889,7 @@ def get_gemini_exposure_tier(config, market, has_open_orders):
         "settings": {},
         "reason": "BTC is not above MA7. Fresh buy blocked.",
     }
+
 
 def get_tiered_max_buy_usdt(exposure_tier, has_open_orders):
     if not exposure_tier or not exposure_tier.get("can_buy", False):
@@ -1266,6 +1157,7 @@ def get_active_manual_pullback_orders(config):
 
     return active
 
+
 def get_highest_open_buy_order_price(config):
     manual_orders_cfg = config.get("manual_open_orders", {})
 
@@ -1333,7 +1225,6 @@ def calculate_planned_btc_exposure_pct_for_limit_buy(config, portfolio, current_
         return 0.0
 
     return planned_btc_value / total_value * 100
-
 
 def build_pullback_limit_candidate_action(
     config,
@@ -1617,36 +1508,6 @@ def calculate_sell_btc_for_target_pct(portfolio, market_price, target_btc_pct):
     sell_btc = btc_now - target_btc
     return max(sell_btc, 0.0)
 
-def is_bullish_confirmation_for_gemini_decision(config, market):
-    """
-    Bullish confirmation gate before Gemini is allowed to choose upside buy.
-    Responsive mode can allow above-MA7 confirmation even below MA20.
-    """
-    decision_cfg = config.get("gemini_decision", {})
-    bullish_cfg = decision_cfg.get("bullish_confirmation", {})
-
-    price = float(market.get("price", 0) or 0)
-    ma7 = float(market.get("ma_7", 0) or 0)
-    ma20 = float(market.get("ma_20", 0) or 0)
-
-    if price <= 0 or ma7 <= 0 or ma20 <= 0:
-        return False
-
-    if bullish_cfg.get("require_price_above_ma7", True):
-        if price <= ma7:
-            return False
-
-    if bullish_cfg.get("require_price_above_ma20", True):
-        confirmation_pct = float(bullish_cfg.get("confirmation_above_ma20_pct", 1.5))
-        required_price = ma20 * (1 + confirmation_pct / 100)
-
-        if price <= required_price:
-            if bullish_cfg.get("allow_if_price_above_ma7_but_below_ma20", False):
-                return price > ma7
-            return False
-
-    return True
-
 
 def calculate_btc_cost_basis_from_manual_lots(config, portfolio):
     """
@@ -1901,7 +1762,6 @@ def build_sell_candidate_actions(config, market, portfolio):
                     })
 
     return actions
-
 
 def build_gemini_candidate_actions(config, market, portfolio, open_orders, intrahour_order_events):
     """
@@ -2229,27 +2089,6 @@ def build_gemini_candidate_actions(config, market, portfolio, open_orders, intra
 
     return actions
 
-    actions.append({
-        "key": "BUY_SMALL_CONFIRMATION_WITH_LADDER",
-        "type": "buy",
-        "signal": "BUY SMALL / BULLISH CONFIRMATION WITH LADDER ACTIVE",
-        "max_buy_usdt": max_buy,
-        "max_sell_btc_pct_of_holdings": 0,
-        "exposure_tier": exposure_tier.get("name"),
-        "tier_reason": exposure_tier.get("reason"),
-        "min_confidence_to_buy": tier_min_confidence,
-        "max_upside_btc_pct_after_buy": max_upside_pct,
-        "max_downside_planned_btc_pct": max_downside_pct,
-        "upside_btc_pct_after_buy": upside_pct,
-        "downside_planned_btc_pct_after_buy_and_open_orders": downside_planned_pct,
-        "reason": (
-            f"Tiered exposure policy allows a small buy under {exposure_tier.get('name')} tier. "
-            f"Upside BTC allocation after buy: {upside_pct:.1f}% / cap {max_upside_pct:.1f}%. "
-            f"Downside planned BTC allocation if open orders fill: {downside_planned_pct:.1f}% / cap {max_downside_pct:.1f}%."
-        ),
-    })
-
-    return actions
 
 def apply_gemini_decision_with_guards(
     config,
@@ -2476,7 +2315,6 @@ def apply_gemini_decision_with_guards(
         }
 
     return base_decision
-
 
 def format_gemini_decision_text(config, gemini_review, candidate_actions, final_decision):
     decision_cfg = config.get("gemini_decision", {})
@@ -2984,7 +2822,6 @@ def get_repo_activity_info():
         "days_since_last_commit": days_since,
     }
 
-
 def build_repo_reminder(config):
     repo_cfg = config.get("github_repo_health", {})
     remind_after = int(repo_cfg.get("remind_after_days", 55))
@@ -3243,20 +3080,7 @@ def record_llm_model_usage(
     save_llm_usage_state(state, config)
 
 
-def calculate_recovery_gap_pct(config, portfolio):
-    recovery_cfg = config.get("recovery", {})
-    initial_capital = float(recovery_cfg.get("initial_capital_usdt", 0))
 
-    if initial_capital <= 0:
-        return 0
-
-    current_value = float(portfolio["total_value"])
-    gap = initial_capital - current_value
-
-    if gap <= 0 or current_value <= 0:
-        return 0
-
-    return (gap / current_value) * 100
 
 
 def is_action_signal(decision):
@@ -4033,143 +3857,6 @@ def extract_json_object(text):
     json_text = text[start:end + 1]
     return json.loads(json_text)
 
-
-def format_ai_review_from_json(ai_data):
-    """
-    Render structured Gemini JSON into Telegram-safe HTML.
-    Gemini sekarang bukan hanya explainer, tapi analyst layer.
-    """
-    required_keys = [
-        "agreement_with_rule",
-        "confidence_score",
-        "market_thesis",
-        "portfolio_diagnosis",
-        "recovery_assessment",
-        "risk_assessment",
-        "suggested_manual_plan",
-        "invalidation",
-        "mental_note",
-    ]
-
-    for key in required_keys:
-        ai_data.setdefault(key, "")
-
-    try:
-        confidence_score = float(ai_data["confidence_score"])
-        if 0 <= confidence_score <= 1:
-            confidence_score = confidence_score * 100
-        confidence_score = int(round(confidence_score))
-    except Exception:
-        confidence_score = ai_data["confidence_score"]
-
-    return (
-        f"<b>AI Analyst Review</b>\n\n"
-        f"<b>Rule Agreement</b>\n"
-        f"{esc(ai_data['agreement_with_rule'])}\n\n"
-        f"<b>Confidence</b>\n"
-        f"<b>{esc(confidence_score)}/100</b>\n\n"
-        f"<b>Market Thesis</b>\n"
-        f"{esc(ai_data['market_thesis'])}\n\n"
-        f"<b>Portfolio Diagnosis</b>\n"
-        f"{esc(ai_data['portfolio_diagnosis'])}\n\n"
-        f"<b>Recovery Assessment</b>\n"
-        f"{esc(ai_data['recovery_assessment'])}\n\n"
-        f"<b>Risk Assessment</b>\n"
-        f"{esc(ai_data['risk_assessment'])}\n\n"
-        f"<b>Suggested Manual Plan</b>\n"
-        f"{esc(ai_data['suggested_manual_plan'])}\n\n"
-        f"<b>Invalidation</b>\n"
-        f"{esc(ai_data['invalidation'])}\n\n"
-        f"<b>Mental Note</b>\n"
-        f"{esc(ai_data['mental_note'])}"
-    )
-
-def clean_ai_explanation(text):
-    """
-    Membersihkan output Gemini agar rapi di Telegram HTML mode.
-    Tujuan:
-    - Hapus pembuka seperti 'Berikut adalah...'
-    - Hapus Markdown code fences ```html ... ```
-    - Convert Markdown bold ke HTML bold
-    - Hapus bullet Markdown
-    - Escape teks berbahaya tanpa merusak tag HTML Telegram yang kita izinkan
-    """
-    if not text:
-        return ""
-
-    text = text.strip()
-
-    # Remove common Gemini preamble
-    preamble_patterns = [
-        r"^Berikut adalah.*?:\s*",
-        r"^Berikut penjelasan.*?:\s*",
-        r"^Tentu,.*?:\s*",
-        r"^Sure,.*?:\s*",
-        r"^Here is.*?:\s*",
-    ]
-
-    for pattern in preamble_patterns:
-        text = re.sub(pattern, "", text, flags=re.IGNORECASE | re.DOTALL).strip()
-
-    # Remove markdown code fences: ```html, ```HTML, ```
-    text = re.sub(r"^```(?:html|HTML)?\s*", "", text).strip()
-    text = re.sub(r"\s*```$", "", text).strip()
-
-    # If Gemini wraps the full output inside code fences somewhere in the text
-    text = text.replace("```html", "")
-    text = text.replace("```HTML", "")
-    text = text.replace("```", "")
-
-    # Convert Markdown bold to Telegram HTML bold
-    text = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", text)
-
-    # Remove Markdown bullet style
-    text = re.sub(r"^\*\s+", "- ", text, flags=re.MULTILINE)
-
-    # Remove excessive indentation
-    text = re.sub(r"^[ \t]+", "", text, flags=re.MULTILINE)
-
-    # Reduce excessive blank lines
-    text = re.sub(r"\n{3,}", "\n\n", text)
-
-    # Keep only Telegram-safe HTML tags we intentionally allow.
-    # Escape all angle brackets first, then unescape allowed tags.
-    allowed_tags = [
-        "b", "/b",
-        "i", "/i",
-        "u", "/u",
-        "s", "/s",
-        "code", "/code",
-        "pre", "/pre",
-    ]
-
-    # Temporarily protect allowed tags
-    protected = {}
-    for i, tag in enumerate(allowed_tags):
-        raw = f"<{tag}>"
-        key = f"__TAG_{i}__"
-        protected[key] = raw
-        text = text.replace(raw, key)
-
-    # Escape remaining HTML
-    text = html.escape(text, quote=False)
-
-    # Restore allowed tags
-    for key, raw in protected.items():
-        text = text.replace(key, raw)
-
-    # Balance simple Telegram HTML tags to prevent Telegram parse errors.
-    # Gemini sometimes outputs <b> without </b>.
-    for tag in ["b", "i", "u", "s", "code", "pre"]:
-        open_count = len(re.findall(fr"<{tag}>", text))
-        close_count = len(re.findall(fr"</{tag}>", text))
-
-        if open_count > close_count:
-            text += "".join(f"</{tag}>" for _ in range(open_count - close_count))
-
-    return text.strip()
-
-
 # ============================================================
 # Recovery and scenario analysis
 # ============================================================
@@ -4328,19 +4015,7 @@ def find_pullback_limit_candidate(candidate_actions):
     return None
 
 
-def find_selected_candidate(candidate_actions, gemini_review):
-    if not gemini_review:
-        return None
 
-    selected_key = gemini_review.get("recommended_action_key")
-    if not selected_key:
-        return None
-
-    for action in candidate_actions or []:
-        if action.get("key") == selected_key:
-            return action
-
-    return None
 
 
 def format_guardrail_check(config, market, portfolio, base_decision,
