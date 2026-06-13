@@ -3343,6 +3343,21 @@ def build_scenario_text(portfolio):
 # Message formatting
 # ============================================================
 
+def format_open_orders(open_orders):
+    if not open_orders:
+        return "Open orders: 0"
+
+    lines = [f"Open orders: {len(open_orders)}"]
+    for order in open_orders[:5]:
+        side = order.get("side")
+        order_type = order.get("type")
+        price = order.get("price")
+        amount = order.get("amount")
+        status = order.get("status")
+        lines.append(f"- {side} {order_type} @ {price} | amount {amount} | {status}")
+
+    return "\n".join(lines)
+
 def format_action_key_line(action):
     key = action.get("key", "UNKNOWN")
     action_type = action.get("type", "hold")
