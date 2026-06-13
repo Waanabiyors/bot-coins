@@ -83,6 +83,13 @@ manual_executions:
     # Allow new buy if signal tier upgrades from early_confirmation to confirmed_breakout.
     allow_new_buy_if_tier_upgrades: true
 
+    # --- Cooldown bypass conditions (set 0 to disable) ---
+    # Bypass cooldown if price rose significantly from last buy (breakout nyata).
+    bypass_if_price_rise_from_last_buy_pct: 5
+
+    # Bypass cooldown if price dropped significantly from last buy (diskon nyata).
+    bypass_if_price_drop_from_last_buy_pct: 10
+
     # If true, manual execution history can block repeat buy before Gemini sees candidates.
     block_before_gemini: true
 
