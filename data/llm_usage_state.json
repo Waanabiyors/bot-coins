@@ -1,7 +1,7 @@
 {
   "quota_date_pacific": "2026-06-12",
-  "grounded_runs_today": 3,
-  "last_grounding_bucket_utc": "2026-06-12T16:00Z",
+  "grounded_runs_today": 5,
+  "last_grounding_bucket_utc": "2026-06-13T04:00Z",
   "models": {
     "gemini-3.5-flash": {
       "requests_today": 15,
@@ -15,14 +15,14 @@
       "cooldown_until_utc": ""
     },
     "gemini-2.5-flash": {
-      "requests_today": 10,
-      "success_today": 2,
-      "errors_today": 8,
-      "last_used_utc": "2026-06-12T18:39:03.537797+00:00",
-      "last_status": "ok",
-      "last_mode": "deep_secondary",
+      "requests_today": 12,
+      "success_today": 3,
+      "errors_today": 9,
+      "last_used_utc": "2026-06-13T04:22:11.397276+00:00",
+      "last_status": "exception",
+      "last_mode": "grounding",
       "last_response_status": 200,
-      "last_error": "{\n  \"error\": {\n    \"code\": 503,\n    \"message\": \"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\n    \"status\": \"UNAVAILABLE\"\n  }\n}\n",
+      "last_error": "name 'record_grounding_usage' is not defined",
       "cooldown_until_utc": ""
     },
     "gemini-2.5-flash-lite": {
