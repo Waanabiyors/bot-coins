@@ -655,6 +655,7 @@ def adjust_decision_for_intrahour_order_events(config, decision, intrahour_order
         ),
     }
 
+
 def format_intrahour_order_events(intrahour_order_events):
     if not intrahour_order_events.get("enabled", False):
         return "Recent price check: disabled"
@@ -1226,6 +1227,7 @@ def calculate_planned_btc_exposure_pct_for_limit_buy(config, portfolio, current_
 
     return planned_btc_value / total_value * 100
 
+
 def build_pullback_limit_candidate_action(
     config,
     market,
@@ -1509,6 +1511,9 @@ def calculate_sell_btc_for_target_pct(portfolio, market_price, target_btc_pct):
     return max(sell_btc, 0.0)
 
 
+
+
+
 def calculate_btc_cost_basis_from_manual_lots(config, portfolio):
     """
     Calculate BTC weighted average entry from manual lots in config.
@@ -1762,6 +1767,7 @@ def build_sell_candidate_actions(config, market, portfolio):
                     })
 
     return actions
+
 
 def build_gemini_candidate_actions(config, market, portfolio, open_orders, intrahour_order_events):
     """
@@ -2822,7 +2828,7 @@ def get_repo_activity_info():
         "days_since_last_commit": days_since,
     }
 
-def build_repo_reminder(config):
+ef build_repo_reminder(config):
     repo_cfg = config.get("github_repo_health", {})
     remind_after = int(repo_cfg.get("remind_after_days", 55))
     critical_after = int(repo_cfg.get("critical_after_days", 57))
@@ -3462,6 +3468,86 @@ def salvage_gemini_decision_from_partial_json(raw_text, action_keys):
         ),
     }
 
+def fetch_macro_grounding_context(config, api_key):
+    """
+    Step 1 of the Two-Step Grounding Pipeline.
+    Fetches the macro news context using Gemini 2.5 Flash with Google Search enabled.
+    This guarantees the search results are extracted cleanly into text, preventing JSON malformation
+    in the main analyst call.
+    """
+    llm_cfg = config.get("llm", {})
+    grounding_cfg = get_llm_model_config(llm_cfg, "grounding")
+    model = grounding_cfg.get("model", "gemini-2.5-flash")
+
+    # Enforce user rule: grounding must use 2.5 flash or lite, do NOT use 3.5 flash
+    if "3.5" in model:
+        model = "gemini-2.5-flash"
+
+    prompt = (
+        "Search the web for the latest Bitcoin macro news, ETF flows, and market sentiment today. "
+        "Summarize the current market context in 3 concise bullet points. "
+        "Focus on facts, not price predictions."
+    )
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "tools": [{"googleSearch": {}}]
+    }
+
+    print(f"[GROUNDING] Fetching macro news via {model}...", flush=True)
+    try:
+        response = requests.post(url, json=payload, timeout=30)
+        
+        record_llm_model_usage(
+            config=config,
+            model=model,
+            mode="grounding_researcher",
+            use_grounding=True,
+            status="ok" if response.ok else "http_error",
+            response_status=response.status_code,
+            error_message=response.text if not response.ok else "",
+        )
+
+        if not response.ok:
+            print(f"[WARN] Grounding failed with {model} (HTTP {response.status_code}). Trying fallback...")
+            fallback_model = "gemini-2.5-flash-lite"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{fallback_model}:generateContent?key={api_key}"
+            
+            print(f"[GROUNDING] Fetching macro news via fallback {fallback_model}...", flush=True)
+            response = requests.post(url, json=payload, timeout=30)
+            
+            record_llm_model_usage(
+                config=config,
+                model=fallback_model,
+                mode="grounding_researcher",
+                use_grounding=True,
+                status="ok" if response.ok else "http_error",
+                response_status=response.status_code,
+                error_message=response.text if not response.ok else "",
+            )
+            
+            if not response.ok:
+                return "Grounding unavailable (API error)."
+
+        data = response.json()
+        candidates = data.get("candidates", [])
+        if not candidates:
+            return "Grounding unavailable (no candidates)."
+            
+        parts = candidates[0].get("content", {}).get("parts", [])
+        if not parts:
+            return "Grounding unavailable (no parts)."
+            
+        text = parts[0].get("text", "").strip()
+        return text if text else "Grounding unavailable (empty text)."
+        
+    except Exception as e:
+        print(f"[WARN] Grounding exception: {e}")
+        return "Grounding unavailable (exception)."
+
+
 def generate_gemini_explanation(
     config,
     market,
@@ -3579,18 +3665,19 @@ def generate_gemini_explanation(
     action_keys = [action["key"] for action in candidate_actions]
 
     grounding_instruction = ""
+    macro_context = ""
     if use_grounding:
-        grounding_instruction = """
-You have Google Search grounding enabled.
-Use it only to assess broad current market context such as:
-- crypto market sentiment,
-- Bitcoin-related macro or ETF headlines,
-- global risk appetite,
-- major risk-on/risk-off catalysts.
+        macro_context = fetch_macro_grounding_context(config, api_key)
+        grounding_instruction = f"""
+You have access to the latest Macro Market News (provided by the Researcher Bot below).
+Use this news context to assess broad market sentiment and justify your thesis.
 
 Do not overreact to one headline.
 Do not cite rumors as facts.
 Do not turn news sentiment into an aggressive trading recommendation.
+
+Macro Market News:
+{macro_context}
 """
 
     prompt = f"""
@@ -3698,21 +3785,21 @@ Data:
         },
     }
 
-    if use_grounding:
-        payload["tools"] = [
-            {
-                "google_search": {}
-            }
-        ]
+    # The JSON-generating API call now executes strictly WITHOUT tools
+    # to prevent Gemini from malforming the JSON with markdown citations.
+    # Grounding context was already injected into the prompt via the Researcher Bot.
 
     try:
         response = requests.post(url, json=payload, timeout=45)
 
+        # The main call (Analyst) does not use grounding tools directly anymore,
+        # so use_grounding=False is passed here to reflect the actual API payload,
+        # while the grounding quota was already recorded by the Researcher Bot.
         record_llm_model_usage(
             config=config,
             model=model,
             mode=routing.get("mode", "unknown"),
-            use_grounding=use_grounding,
+            use_grounding=False,
             status="ok" if response.ok else "http_error",
             response_status=response.status_code,
             error_message=response.text if not response.ok else "",
@@ -3724,9 +3811,6 @@ Data:
             return unavailable(f"main request HTTP error {response.status_code}")
 
         data = response.json()
-
-        # Grounding usage is already recorded by record_llm_model_usage(...)
-        # when use_grounding=True. Do not call record_grounding_usage() here.
 
         candidates = data.get("candidates", [])
         if not candidates:
@@ -3857,6 +3941,7 @@ def extract_json_object(text):
     json_text = text[start:end + 1]
     return json.loads(json_text)
 
+
 # ============================================================
 # Recovery and scenario analysis
 # ============================================================
@@ -3919,7 +4004,6 @@ def calculate_price_scenarios(portfolio, price_levels):
         })
 
     return scenarios
-
 
 def build_scenario_text(portfolio):
     price_levels = [50000, 55000, 60000, 65000, 70000, 75000]
