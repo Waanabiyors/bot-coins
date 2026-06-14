@@ -1510,9 +1510,6 @@ def calculate_sell_btc_for_target_pct(portfolio, market_price, target_btc_pct):
     return max(sell_btc, 0.0)
 
 
-
-
-
 def calculate_btc_cost_basis_from_manual_lots(config, portfolio):
     """
     Calculate BTC weighted average entry from manual lots in config.
@@ -3031,7 +3028,6 @@ def is_model_available(config, model, daily_limit):
 
     return True, f"model available: {requests_today}/{usable_limit}"
 
-
 def record_llm_model_usage(
     config,
     model,
@@ -3809,7 +3805,34 @@ Data:
         )
 
         if not response.ok:
-            print(f"[WARN] Gemini error with {model}: {response.status_code} {response.text}")
+            print(f"[WARN] Gemini error with {analyst_model}: {response.status_code} {response.text}")
+            
+            fallback_configs = llm_cfg.get("fallback_models", [])
+            for fb_cfg in fallback_configs:
+                fb_model = fb_cfg["model"]
+                fb_url = f"https://generativelanguage.googleapis.com/v1beta/models/{fb_model}:generateContent?key={api_key}"
+                
+                payload["generationConfig"]["maxOutputTokens"] = fb_cfg.get("max_output_tokens", 1500)
+                
+                print(f"[WARN] Retrying Analyst generation with fallback model: {fb_model}...", flush=True)
+                response = requests.post(fb_url, json=payload, timeout=45)
+                
+                record_llm_model_usage(
+                    config=config,
+                    model=fb_model,
+                    mode="fallback",
+                    use_grounding=False,
+                    status="ok" if response.ok else "http_error",
+                    response_status=response.status_code,
+                    error_message=response.text if not response.ok else "",
+                )
+                
+                if response.ok:
+                    print(f"[SUCCESS] Fallback to {fb_model} succeeded!", flush=True)
+                    break
+
+        if not response.ok:
+            print(f"[ERROR] All models failed. Last error: {response.status_code}")
             set_last_routing(routing, "unavailable", f"http_error_{response.status_code}")
             return unavailable(f"main request HTTP error {response.status_code}")
 
@@ -3830,6 +3853,9 @@ Data:
             set_last_routing(routing, "unavailable", "empty_text")
             return unavailable("main response text is empty")
 
+        ai_source = "main_json"
+        request_status = "success"
+
         try:
             ai_data = extract_json_object(raw_text)
         except Exception as parse_error:
@@ -3847,7 +3873,8 @@ Data:
                     flush=True,
                 )
                 ai_data = recovered_ai_data
-                set_last_routing(routing, "partial_json_recovery", "json_parse_recovered")
+                ai_source = "partial_json_recovery"
+                request_status = "json_parse_recovered"
             else:
                 set_last_routing(routing, "unavailable", "json_parse_failed")
                 return unavailable(f"Gemini JSON parse failed: {parse_error}")
@@ -3899,7 +3926,7 @@ Data:
             "mental_note": ai_data.get("mental_note", ""),
         }
 
-        set_last_routing(routing, "main_json", "success")
+        set_last_routing(routing, ai_source, request_status)
         return result
 
     except Exception as error:
@@ -4019,7 +4046,7 @@ def build_scenario_text(portfolio):
         )
 
     return "\n".join(lines)
-    
+
 # ============================================================
 # Message formatting
 # ============================================================
