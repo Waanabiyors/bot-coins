@@ -318,7 +318,7 @@ llm:
 
     grounding:
       model: "gemini-2.5-flash"
-      max_output_tokens: 2500
+      max_output_tokens: 10000
       daily_limit: 20
 
     fallback:
