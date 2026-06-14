@@ -2828,7 +2828,7 @@ def get_repo_activity_info():
         "days_since_last_commit": days_since,
     }
 
-ef build_repo_reminder(config):
+def build_repo_reminder(config):
     repo_cfg = config.get("github_repo_health", {})
     remind_after = int(repo_cfg.get("remind_after_days", 55))
     critical_after = int(repo_cfg.get("critical_after_days", 57))
