@@ -1,7 +1,7 @@
 {
   "quota_date_pacific": "2026-06-14",
   "grounded_runs_today": 4,
-  "last_grounding_bucket_utc": "2026-06-14T14:00Z",
+  "last_grounding_bucket_utc": "",
   "models": {
     "gemini-2.5-flash": {
       "requests_today": 8,
