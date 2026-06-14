@@ -1,13 +1,13 @@
 {
   "quota_date_pacific": "2026-06-14",
-  "grounded_runs_today": 5,
-  "last_grounding_bucket_utc": "",
+  "grounded_runs_today": 6,
+  "last_grounding_bucket_utc": "2026-06-14T15:00Z",
   "models": {
     "gemini-2.5-flash": {
-      "requests_today": 10,
-      "success_today": 9,
+      "requests_today": 12,
+      "success_today": 11,
       "errors_today": 1,
-      "last_used_utc": "2026-06-14T15:05:28.527939+00:00",
+      "last_used_utc": "2026-06-14T15:21:32.438364+00:00",
       "last_status": "ok",
       "last_mode": "grounding",
       "last_response_status": 200,
