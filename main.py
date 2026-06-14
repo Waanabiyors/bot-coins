@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+#CONFIG_FILE = "config_git.yaml"
 CONFIG_FILE = os.getenv("BTC_AGENT_CONFIG", "config_git.yaml")
 
 # ============================================================
@@ -979,7 +980,6 @@ def get_latest_filled_manual_buy(config):
     filled_buys.sort(key=lambda item: item["_executed_at_dt"], reverse=True)
     return filled_buys[0]
 
-
 def evaluate_manual_buy_anti_repeat(config, market, exposure_tier, candidate_action_key):
     """
     Prevent repeated manual buys from the same signal/tier.
@@ -1766,7 +1766,6 @@ def build_sell_candidate_actions(config, market, portfolio):
                     })
 
     return actions
-
 
 def build_gemini_candidate_actions(config, market, portfolio, open_orders, intrahour_order_events):
     """
@@ -2827,6 +2826,7 @@ def get_repo_activity_info():
         "days_since_last_commit": days_since,
     }
 
+
 def build_repo_reminder(config):
     repo_cfg = config.get("github_repo_health", {})
     remind_after = int(repo_cfg.get("remind_after_days", 55))
@@ -2881,7 +2881,6 @@ def get_llm_state_file(config=None):
     llm_cfg = config.get("llm", {})
     quota_cfg = llm_cfg.get("quota_guard", {})
     return quota_cfg.get("state_file", LLM_USAGE_STATE_FILE)
-
 
 def load_llm_usage_state(config=None):
     state_file = get_llm_state_file(config)
@@ -3467,6 +3466,7 @@ def salvage_gemini_decision_from_partial_json(raw_text, action_keys):
         ),
     }
 
+
 def fetch_macro_grounding_context(config, api_key):
     """
     Step 1 of the Two-Step Grounding Pipeline.
@@ -3645,6 +3645,9 @@ def generate_gemini_explanation(
     routing_reason = routing["routing_reason"]
     temperature = float(llm_cfg.get("temperature", 0.2))
 
+    analyst_model = model
+    analyst_max_tokens = max_output_tokens
+
     context = build_rule_summary_for_llm(
         config=config,
         market=market,
@@ -3767,7 +3770,7 @@ Data:
 
     url = (
         f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{model}:generateContent?key={api_key}"
+        f"{analyst_model}:generateContent?key={api_key}"
     )
 
     payload = {
@@ -3780,7 +3783,7 @@ Data:
         ],
         "generationConfig": {
             "temperature": temperature,
-            "maxOutputTokens": max_output_tokens,
+            "maxOutputTokens": analyst_max_tokens,
         },
     }
 
@@ -3796,7 +3799,7 @@ Data:
         # while the grounding quota was already recorded by the Researcher Bot.
         record_llm_model_usage(
             config=config,
-            model=model,
+            model=analyst_model,
             mode=routing.get("mode", "unknown"),
             use_grounding=False,
             status="ok" if response.ok else "http_error",
@@ -3940,7 +3943,6 @@ def extract_json_object(text):
     json_text = text[start:end + 1]
     return json.loads(json_text)
 
-
 # ============================================================
 # Recovery and scenario analysis
 # ============================================================
@@ -4003,6 +4005,7 @@ def calculate_price_scenarios(portfolio, price_levels):
         })
 
     return scenarios
+
 
 def build_scenario_text(portfolio):
     price_levels = [50000, 55000, 60000, 65000, 70000, 75000]
