@@ -338,8 +338,8 @@ llm:
   grounding:
     enabled: true
     use_google_search: true
-    interval_hours: 4
-    max_grounded_runs_per_day: 6
+    interval_hours: 1
+    max_grounded_runs_per_day: 60
     use_on_interval: true
     use_on_high_volatility: true
     use_on_action_signal: true
