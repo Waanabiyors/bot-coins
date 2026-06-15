@@ -1,7 +1,7 @@
 name: BTC Discipline Agent
 
 on:
-  #push:
+  push:
     paths-ignore:
       - "data/llm_usage_state.json"
   workflow_dispatch:
