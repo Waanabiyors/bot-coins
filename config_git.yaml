@@ -6,7 +6,7 @@ portfolio:
   target_btc_min_pct: 50
   target_btc_max_pct: 75
   max_single_buy_usdt: 60
-  emergency_usdt_reserve: 150
+  emergency_usdt_reserve: 100
 
 mental:
   state: calm
