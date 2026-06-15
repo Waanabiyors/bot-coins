@@ -269,9 +269,13 @@ def get_coingecko_price(coingecko_id="bitcoin"):
         "&include_24hr_change=true"
     )
 
-    data = requests.get(url, timeout=25).json()
+    response = requests.get(url, timeout=25)
+    data = response.json()
 
     coin_data = data.get(coingecko_id, {})
+    if not coin_data or "usd" not in coin_data:
+        raise RuntimeError(f"CoinGecko missing usd price for {coingecko_id}: {data}")
+
     price = float(coin_data["usd"])
     change = float(coin_data.get("usd_24h_change", 0))
 
@@ -318,8 +322,13 @@ def get_daily_klines(symbol, days=30, **kwargs):
         "interval": "daily",
     }
 
-    data = requests.get(url, params=params, timeout=25).json()
-    prices = data["prices"]
+    response = requests.get(url, params=params, timeout=25)
+    data = response.json()
+    prices = data.get("prices", [])
+
+    if not prices:
+        print(f"[WARN] No prices returned from CoinGecko for {coingecko_id}: {data}")
+        return pd.DataFrame(columns=["time", "open", "high", "low", "close", "volume"])
 
     rows = []
     for timestamp_ms, price in prices:
@@ -4077,13 +4086,15 @@ def calculate_recovery_status(config, portfolio):
     }
 
 
-def calculate_price_scenarios(portfolio, price_levels):
-    btc = float(portfolio[config.get("asset", {}).get("base", "BTC").lower()])
-    usdt = float(portfolio["usdt"])
+def calculate_price_scenarios(portfolio, price_levels, config):
+    asset = get_asset_config(config)
+    base = asset.get("base", "BTC").lower()
+    base_amt = float(portfolio.get(base, 0) or 0)
+    usdt = float(portfolio.get("usdt", 0) or 0)
 
     scenarios = []
     for price in price_levels:
-        value = usdt + (btc * price)
+        value = usdt + (base_amt * price)
         scenarios.append({
             "price": price,
             "portfolio_value": value,
@@ -4092,14 +4103,30 @@ def calculate_price_scenarios(portfolio, price_levels):
     return scenarios
 
 
-def build_scenario_text(portfolio):
-    price_levels = [50000, 55000, 60000, 65000, 70000, 75000]
-    scenarios = calculate_price_scenarios(portfolio, price_levels)
+def build_scenario_text(portfolio, config, market):
+    current_price = float(market.get("price", 0) or 0)
+    if current_price <= 0:
+        return "Scenario if no new transaction:\n- N/A"
+
+    price_levels = [
+        current_price * 0.5,
+        current_price * 0.8,
+        current_price,
+        current_price * 1.2,
+        current_price * 1.5,
+        current_price * 2.0
+    ]
+    scenarios = calculate_price_scenarios(portfolio, price_levels, config)
+
+    asset = get_asset_config(config)
+    base = asset.get("base", "BTC")
+    price_decimals = asset.get("price_decimals", 2)
 
     lines = ["Scenario if no new transaction:"]
     for item in scenarios:
+        formatted_price = format_price(item['price'], price_decimals)
         lines.append(
-            f"- BTC ${item['price']:,.0f}: portfolio ≈ {item['portfolio_value']:.2f} USDT"
+            f"- {base} {formatted_price}: portfolio ≈ {item['portfolio_value']:.2f} USDT"
         )
 
     return "\n".join(lines)
@@ -4411,7 +4438,7 @@ def build_message(config, market, portfolio, decision,
 
     recovery = calculate_recovery_status(config, portfolio)
     recovery_text = recovery.get("message", "")
-    scenario_text = build_scenario_text(portfolio)
+    scenario_text = build_scenario_text(portfolio, config, market)
 
     portfolio_note = ""
     if portfolio.get("error"):
