@@ -26,8 +26,8 @@ assets:
     asset:
       base: ASR
       quote: USDT
-      name: AS Roma Fan Token
-      coingecko_id: as-roma-fan-token
+      name: AS Roma Fan 
+      coingecko_id: as-roma-fan-
       agent_name: Brother ASR Agent
       price_decimals: 3
     portfolio:
@@ -62,8 +62,8 @@ assets:
     asset:
       base: SANTOS
       quote: USDT
-      name: Santos FC Fan Token
-      coingecko_id: santos-fc-fan-token
+      name: Santos FC Fan 
+      coingecko_id: santos-fc-fan-
       agent_name: Brother SANTOS Agent
       price_decimals: 3
     portfolio:
@@ -80,8 +80,8 @@ assets:
     asset:
       base: PSG
       quote: USDT
-      name: Paris Saint-Germain Fan Token
-      coingecko_id: paris-saint-germain-fan-token
+      name: Paris Saint-Germain Fan 
+      coingecko_id: paris-saint-germain-fan-
       agent_name: Brother PSG Agent
       price_decimals: 3
     portfolio:
@@ -268,23 +268,23 @@ llm:
   models:
     deep_primary:
       model: "gemini-3.5-flash"
-      max_output_tokens: 2800
+      max_output_tokens: 18000
       daily_limit: 20
     deep_secondary:
       model: "gemini-2.5-flash"
-      max_output_tokens: 3000
+      max_output_tokens: 13000
       daily_limit: 20
     grounding:
       model: "gemini-2.5-flash"
-      max_output_tokens: 5000
+      max_output_tokens: 15000
       daily_limit: 20
     fallback:
       model: "gemini-2.5-flash-lite"
-      max_output_tokens: 1500
+      max_output_tokens: 15000
       daily_limit: 20
   fallback_models:
     - model: "gemini-2.5-flash"
-      max_output_tokens: 2200
+      max_output_tokens: 12200
       daily_limit: 20
   grounding:
     enabled: true
