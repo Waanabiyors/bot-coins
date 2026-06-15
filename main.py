@@ -9,9 +9,19 @@ import requests
 import yaml
 import re
 from dotenv import load_dotenv
-
+import copy
+import collections.abc
 
 load_dotenv()
+
+def deep_update(d, u):
+    for k, v in u.items():
+        if isinstance(v, collections.abc.Mapping):
+            d[k] = deep_update(d.get(k, {}), v)
+        else:
+            d[k] = v
+    return d
+
 
 
 #CONFIG_FILE = "config_git.yaml"
@@ -43,8 +53,8 @@ def enforce_no_trading(config):
 # Config and environment
 # ============================================================
 
-def load_config():
-    with open(CONFIG_FILE, "r", encoding="utf-8") as file:
+def load_config(filename="config_git.yaml"):
+    with open(filename, "r", encoding="utf-8") as file:
         return yaml.safe_load(file)
 
 
@@ -56,6 +66,34 @@ def get_required_env(name):
 
 def esc(value):
     return html.escape(str(value), quote=False)
+
+
+def get_asset_config(config):
+    """
+    Read asset-specific configuration.
+    Returns defaults for BTC if asset section is not present (backward compatible).
+    """
+    asset_cfg = config.get("asset", {})
+    symbol = config.get("symbol", "BTC/USDT")
+    parts = symbol.split("/")
+    default_base = parts[0] if len(parts) >= 1 else "BTC"
+    default_quote = parts[1] if len(parts) >= 2 else "USDT"
+
+    return {
+        "base": asset_cfg.get("base", default_base),
+        "quote": asset_cfg.get("quote", default_quote),
+        "name": asset_cfg.get("name", default_base),
+        "coingecko_id": asset_cfg.get("coingecko_id", "bitcoin"),
+        "agent_name": asset_cfg.get("agent_name", f"{default_base} Discipline Agent"),
+        "price_decimals": int(asset_cfg.get("price_decimals", 0)),
+    }
+
+
+def format_price(price, decimals=0):
+    """Format price with appropriate decimal places."""
+    if decimals <= 0:
+        return f"${price:,.0f}"
+    return f"${price:,.{decimals}f}"
 
 
 # ============================================================
@@ -124,7 +162,7 @@ def send_telegram(message):
 
     for index, chunk in enumerate(chunks, start=1):
         if total_chunks > 1:
-            prefix = f"<b>BTC Discipline Agent</b> — Part {index}/{total_chunks}\n\n"
+            prefix = f"<b>Brother Portfolio Agent</b> — Part {index}/{total_chunks}\n\n"
 
             if index == 1:
                 chunk_to_send = chunk
@@ -223,18 +261,19 @@ def get_tokocrypto_price_via_ccxt(symbol):
     }
 
 
-def get_coingecko_price():
+def get_coingecko_price(coingecko_id="bitcoin"):
     url = (
         "https://api.coingecko.com/api/v3/simple/price"
-        "?ids=bitcoin"
+        f"?ids={coingecko_id}"
         "&vs_currencies=usd"
         "&include_24hr_change=true"
     )
 
     data = requests.get(url, timeout=25).json()
 
-    price = float(data["bitcoin"]["usd"])
-    change = float(data["bitcoin"].get("usd_24h_change", 0))
+    coin_data = data.get(coingecko_id, {})
+    price = float(coin_data["usd"])
+    change = float(coin_data.get("usd_24h_change", 0))
 
     return {
         "price": price,
@@ -246,7 +285,7 @@ def get_coingecko_price():
     }
 
 
-def get_24h_ticker(symbol):
+def get_24h_ticker(symbol, config=None):
     """
     Primary: Tokocrypto price.
     Fallback: CoinGecko.
@@ -255,20 +294,24 @@ def get_24h_ticker(symbol):
     Tapi karena CCXT Tokocrypto public ticker di WSL kamu pernah timeout
     ke api.binance.com, fallback CoinGecko wajib.
     """
+    asset = get_asset_config(config) if config else {"coingecko_id": "bitcoin"}
+    coingecko_id = asset.get("coingecko_id", "bitcoin")
+
     try:
-        return get_tokocrypto_price_via_ccxt("BTC/USDT")
+        return get_tokocrypto_price_via_ccxt(symbol)
     except Exception as error:
         print(f"[WARN] Tokocrypto price failed, fallback to CoinGecko: {error}")
 
-    return get_coingecko_price()
+    return get_coingecko_price(coingecko_id=coingecko_id)
 
 
-def get_daily_klines(symbol, days=30):
+def get_daily_klines(symbol, days=30, **kwargs):
     """
     Untuk historical daily data, kita pakai CoinGecko agar stabil.
     Tokocrypto/CCXT OHLCV bisa bermasalah karena routing endpoint.
     """
-    url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart"
+    coingecko_id = kwargs.get("coingecko_id", "bitcoin")
+    url = f"https://api.coingecko.com/api/v3/coins/{coingecko_id}/market_chart"
     params = {
         "vs_currency": "usd",
         "days": days,
@@ -328,7 +371,9 @@ def get_recent_intrahour_price_window(config):
             "rows": [],
         }
 
-    url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart"
+    asset = get_asset_config(config)
+    coingecko_id = asset.get("coingecko_id", "bitcoin")
+    url = f"https://api.coingecko.com/api/v3/coins/{coingecko_id}/market_chart"
     params = {
         "vs_currency": "usd",
         "days": 1,
@@ -531,7 +576,7 @@ def estimate_portfolio_if_touched_orders_filled(config, touched_orders, current_
     portfolio_cfg = config.get("portfolio", {})
     manual_orders_cfg = config.get("manual_open_orders", {})
 
-    base_btc = float(portfolio_cfg.get("btc", 0) or 0)
+    base_asset_qty = float(portfolio_cfg.get(config.get("asset", {}).get("base", "BTC").lower(), 0) or 0)
     base_usdt_total = float(portfolio_cfg.get("usdt", 0) or 0)
 
     touched_buy_orders = [
@@ -544,7 +589,7 @@ def estimate_portfolio_if_touched_orders_filled(config, touched_orders, current_
         for event in touched_buy_orders
     )
 
-    touched_btc_amount = sum(
+    touched_base_amount = sum(
         float(event.get("amount", 0) or 0)
         for event in touched_buy_orders
     )
@@ -586,22 +631,22 @@ def estimate_portfolio_if_touched_orders_filled(config, touched_orders, current_
                     allocated_usdt = price * amount
                 remaining_open_order_usdt += allocated_usdt
 
-    estimated_btc = base_btc + touched_btc_amount
+    estimated_base = base_asset_qty + touched_base_amount
     estimated_usdt_total = max(base_usdt_total - touched_allocated_usdt, 0)
     estimated_usdt_used = remaining_open_order_usdt
     estimated_usdt_free = max(estimated_usdt_total - estimated_usdt_used, 0)
 
-    estimated_btc_value = estimated_btc * current_price
-    estimated_total_value = estimated_usdt_total + estimated_btc_value
-    estimated_btc_pct = (
-        (estimated_btc_value / estimated_total_value) * 100
+    estimated_base_value = estimated_base * current_price
+    estimated_total_value = estimated_usdt_total + estimated_base_value
+    estimated_base_pct = (
+        (estimated_base_value / estimated_total_value) * 100
         if estimated_total_value > 0 else 0
     )
-    estimated_usdt_pct = 100 - estimated_btc_pct if estimated_total_value > 0 else 0
+    estimated_usdt_pct = 100 - estimated_base_pct if estimated_total_value > 0 else 0
 
     avg_touched_price = (
-        touched_allocated_usdt / touched_btc_amount
-        if touched_btc_amount > 0 else 0
+        touched_allocated_usdt / touched_base_amount
+        if touched_base_amount > 0 else 0
     )
 
     return {
@@ -609,18 +654,18 @@ def estimate_portfolio_if_touched_orders_filled(config, touched_orders, current_
         "must_verify_tokocrypto": True,
         "touched_order_count": len(touched_buy_orders),
         "touched_prices": touched_prices,
-        "touched_btc_amount": touched_btc_amount,
+        "touched_base_amount": touched_base_amount,
         "touched_allocated_usdt": touched_allocated_usdt,
         "avg_touched_price": avg_touched_price,
-        "base_btc": base_btc,
+        "base_asset_qty": base_asset_qty,
         "base_usdt_total": base_usdt_total,
-        "estimated_btc": estimated_btc,
+        "estimated_base": estimated_base,
         "estimated_usdt_total": estimated_usdt_total,
         "estimated_usdt_free": estimated_usdt_free,
         "estimated_usdt_used_open_orders": estimated_usdt_used,
-        "estimated_btc_value": estimated_btc_value,
+        "estimated_base_value": estimated_base_value,
         "estimated_total_value": estimated_total_value,
-        "estimated_btc_pct": estimated_btc_pct,
+        "estimated_base_pct": estimated_base_pct,
         "estimated_usdt_pct": estimated_usdt_pct,
     }
 
@@ -696,11 +741,11 @@ def format_intrahour_order_events(intrahour_order_events):
     if estimate:
         lines.append("")
         lines.append("Estimated portfolio if touched buy orders were filled:")
-        lines.append(f"- BTC estimate: {estimate['estimated_btc']:.8f}")
+        lines.append(f"- Base estimate: {estimate['estimated_base']:.8f}")
         lines.append(f"- USDT total estimate: {estimate['estimated_usdt_total']:.2f}")
         lines.append(f"- USDT free estimate: {estimate['estimated_usdt_free']:.2f}")
         lines.append(f"- USDT still in open orders estimate: {estimate['estimated_usdt_used_open_orders']:.2f}")
-        lines.append(f"- BTC allocation estimate: {estimate['estimated_btc_pct']:.1f}%")
+        lines.append(f"- Base allocation estimate: {estimate['estimated_base_pct']:.1f}%")
         lines.append(f"- Total value estimate: {estimate['estimated_total_value']:.2f} USDT")
 
     lines.append("")
@@ -712,14 +757,14 @@ def format_intrahour_order_events(intrahour_order_events):
 # Gemini-assisted decision guard
 # ============================================================
 
-def calculate_planned_btc_exposure_pct(config, portfolio, market_price, extra_buy_usdt=0):
+def calculate_planned_base_exposure_pct(config, portfolio, market_price, extra_buy_usdt=0):
     """
     Planned BTC exposure:
     current BTC + BTC from still-open manual buy orders + optional extra buy.
     This prevents Gemini from recommending upside buys that make total planned exposure too aggressive.
     """
     manual_orders_cfg = config.get("manual_open_orders", {})
-    open_order_btc = 0.0
+    open_order_base = 0.0
 
     if manual_orders_cfg.get("enabled", False):
         for order in manual_orders_cfg.get("orders", []):
@@ -731,40 +776,40 @@ def calculate_planned_btc_exposure_pct(config, portfolio, market_price, extra_bu
                 continue
 
             amount = float(order.get("amount", 0) or 0)
-            open_order_btc += amount
+            open_order_base += amount
 
-    extra_btc = 0.0
+    extra_base = 0.0
     if market_price > 0 and extra_buy_usdt > 0:
-        extra_btc = extra_buy_usdt / market_price
+        extra_base = extra_buy_usdt / market_price
 
-    planned_btc = float(portfolio.get("btc", 0) or 0) + open_order_btc + extra_btc
-    planned_btc_value = planned_btc * market_price
+    planned_base = float(portfolio.get(config.get("asset", {}).get("base", "BTC").lower(), 0) or 0) + open_order_base + extra_base
+    planned_base_value = planned_base * market_price
 
     total_value = float(portfolio.get("total_value", 0) or 0)
     if total_value <= 0:
         return 0.0
 
-    return planned_btc_value / total_value * 100
+    return planned_base_value / total_value * 100
 
-def calculate_upside_btc_pct_after_buy(portfolio, market_price, buy_usdt):
+def calculate_upside_base_pct_after_buy(portfolio, market_price, buy_usdt):
     """
     Upside BTC exposure:
     current BTC + immediate Gemini buy only.
     This intentionally excludes lower open buy orders because they are unlikely
     to fill if BTC continues moving upward.
     """
-    btc_now = float(portfolio.get("btc", 0) or 0)
+    base_now = float(portfolio.get(config.get("asset", {}).get("base", "BTC").lower(), 0) or 0)
     total_value = float(portfolio.get("total_value", 0) or 0)
 
     if market_price <= 0 or total_value <= 0:
         return 0.0
 
-    extra_btc = 0.0
+    extra_base = 0.0
     if buy_usdt > 0:
-        extra_btc = buy_usdt / market_price
+        extra_base = buy_usdt / market_price
 
-    btc_value_after_buy = (btc_now + extra_btc) * market_price
-    return btc_value_after_buy / total_value * 100
+    base_value_after_buy = (base_now + extra_base) * market_price
+    return base_value_after_buy / total_value * 100
 
 
 def get_gemini_exposure_tier(config, market, has_open_orders):
@@ -788,16 +833,16 @@ def get_gemini_exposure_tier(config, market, has_open_orders):
             "description": "BTC above MA7 but still below confirmed MA20 breakout",
             "max_buy_usdt_with_open_orders": 15,
             "max_buy_usdt_without_open_orders": 25,
-            "max_upside_btc_pct_after_buy": 35,
-            "max_downside_planned_btc_pct": 55,
+            "max_upside_base_pct_after_buy": 35,
+            "max_downside_planned_base_pct": 55,
             "min_confidence_to_buy": 85,
         },
         "confirmed_breakout": {
             "description": "BTC above MA20 with confirmation",
             "max_buy_usdt_with_open_orders": 25,
             "max_buy_usdt_without_open_orders": 40,
-            "max_upside_btc_pct_after_buy": 45,
-            "max_downside_planned_btc_pct": 60,
+            "max_upside_base_pct_after_buy": 45,
+            "max_downside_planned_base_pct": 60,
             "min_confidence_to_buy": 80,
         },
         "overheated": {
@@ -1184,22 +1229,22 @@ def get_highest_open_buy_order_price(config):
     return max(prices)
 
 
-def calculate_btc_pct_after_limit_buy(portfolio, current_price, limit_price, buy_usdt):
-    btc_now = float(portfolio.get("btc", 0) or 0)
+def calculate_base_pct_after_limit_buy(portfolio, current_price, limit_price, buy_usdt):
+    base_now = float(portfolio.get(config.get("asset", {}).get("base", "BTC").lower(), 0) or 0)
     total_value = float(portfolio.get("total_value", 0) or 0)
 
     if current_price <= 0 or limit_price <= 0 or total_value <= 0 or buy_usdt <= 0:
         return 0.0
 
-    extra_btc = buy_usdt / limit_price
-    btc_value_after_fill = (btc_now + extra_btc) * current_price
+    extra_base = buy_usdt / limit_price
+    base_value_after_fill = (base_now + extra_base) * current_price
 
-    return btc_value_after_fill / total_value * 100
+    return base_value_after_fill / total_value * 100
 
 
-def calculate_planned_btc_exposure_pct_for_limit_buy(config, portfolio, current_price, limit_price, buy_usdt):
+def calculate_planned_base_exposure_pct_for_limit_buy(config, portfolio, current_price, limit_price, buy_usdt):
     manual_orders_cfg = config.get("manual_open_orders", {})
-    open_order_btc = 0.0
+    open_order_base = 0.0
 
     if manual_orders_cfg.get("enabled", False):
         for order in manual_orders_cfg.get("orders", []):
@@ -1211,20 +1256,20 @@ def calculate_planned_btc_exposure_pct_for_limit_buy(config, portfolio, current_
                 continue
 
             amount = float(order.get("amount", 0) or 0)
-            open_order_btc += amount
+            open_order_base += amount
 
-    extra_btc = 0.0
+    extra_base = 0.0
     if limit_price > 0 and buy_usdt > 0:
-        extra_btc = buy_usdt / limit_price
+        extra_base = buy_usdt / limit_price
 
-    planned_btc = float(portfolio.get("btc", 0) or 0) + open_order_btc + extra_btc
-    planned_btc_value = planned_btc * current_price
+    planned_base = float(portfolio.get(config.get("asset", {}).get("base", "BTC").lower(), 0) or 0) + open_order_base + extra_base
+    planned_base_value = planned_base * current_price
 
     total_value = float(portfolio.get("total_value", 0) or 0)
     if total_value <= 0:
         return 0.0
 
-    return planned_btc_value / total_value * 100
+    return planned_base_value / total_value * 100
 
 
 def build_pullback_limit_candidate_action(
@@ -1274,7 +1319,7 @@ def build_pullback_limit_candidate_action(
                 "type": "hold",
                 "signal": "HOLD / ACTIVE PULLBACK LIMIT EXISTS",
                 "max_buy_usdt": 0,
-                "max_sell_btc_pct_of_holdings": 0,
+                "max_sell_base_pct_of_holdings": 0,
                 "active_pullback_order_count": len(active_pullback_orders),
                 "reason": (
                     f"Adaptive pullback limit is blocked because {len(active_pullback_orders)} "
@@ -1329,7 +1374,7 @@ def build_pullback_limit_candidate_action(
                 "type": "hold",
                 "signal": "HOLD / PULLBACK LIMIT TOO CLOSE TO OLD LADDER",
                 "max_buy_usdt": 0,
-                "max_sell_btc_pct_of_holdings": 0,
+                "max_sell_base_pct_of_holdings": 0,
                 "highest_open_buy_price": highest_open_buy,
                 "minimum_allowed_price": minimum_allowed_price,
                 "suggested_limit_price": suggested_limit_price,
@@ -1361,21 +1406,21 @@ def build_pullback_limit_candidate_action(
             "type": "hold",
             "signal": "HOLD / PULLBACK LIMIT BLOCKED BY RESERVE",
             "max_buy_usdt": 0,
-            "max_sell_btc_pct_of_holdings": 0,
+            "max_sell_base_pct_of_holdings": 0,
             "reason": (
                 f"Adaptive pullback limit is blocked because placing {order_usdt:.2f} USDT "
                 f"would reduce USDT free balance below reserve {min_free:.2f}."
             ),
         }
 
-    upside_pct_after_fill = calculate_btc_pct_after_limit_buy(
+    upside_pct_after_fill = calculate_base_pct_after_limit_buy(
         portfolio=portfolio,
         current_price=price,
         limit_price=suggested_limit_price,
         buy_usdt=order_usdt,
     )
 
-    downside_planned_pct_after_fill = calculate_planned_btc_exposure_pct_for_limit_buy(
+    downside_planned_pct_after_fill = calculate_planned_base_exposure_pct_for_limit_buy(
         config=config,
         portfolio=portfolio,
         current_price=price,
@@ -1387,15 +1432,15 @@ def build_pullback_limit_candidate_action(
 
     max_upside_pct = float(
         pullback_cfg.get(
-            "max_upside_btc_pct_after_fill",
-            tier_settings.get("max_upside_btc_pct_after_buy", 35),
+            "max_upside_base_pct_after_fill",
+            tier_settings.get("max_upside_base_pct_after_buy", 35),
         ) or 35
     )
 
     max_downside_pct = float(
         pullback_cfg.get(
-            "max_downside_planned_btc_pct_after_fill",
-            tier_settings.get("max_downside_planned_btc_pct", 55),
+            "max_downside_planned_base_pct_after_fill",
+            tier_settings.get("max_downside_planned_base_pct", 55),
         ) or 55
     )
 
@@ -1405,9 +1450,9 @@ def build_pullback_limit_candidate_action(
             "type": "hold",
             "signal": "HOLD / PULLBACK LIMIT BLOCKED BY UPSIDE EXPOSURE",
             "max_buy_usdt": 0,
-            "max_sell_btc_pct_of_holdings": 0,
-            "upside_btc_pct_after_fill": upside_pct_after_fill,
-            "max_upside_btc_pct_after_fill": max_upside_pct,
+            "max_sell_base_pct_of_holdings": 0,
+            "upside_base_pct_after_fill": upside_pct_after_fill,
+            "max_upside_base_pct_after_fill": max_upside_pct,
             "reason": (
                 f"Adaptive pullback limit is blocked because BTC allocation after fill "
                 f"would be {upside_pct_after_fill:.1f}%, above cap {max_upside_pct:.1f}%."
@@ -1420,9 +1465,9 @@ def build_pullback_limit_candidate_action(
             "type": "hold",
             "signal": "HOLD / PULLBACK LIMIT BLOCKED BY DOWNSIDE PLANNED EXPOSURE",
             "max_buy_usdt": 0,
-            "max_sell_btc_pct_of_holdings": 0,
-            "downside_planned_btc_pct_after_fill": downside_planned_pct_after_fill,
-            "max_downside_planned_btc_pct_after_fill": max_downside_pct,
+            "max_sell_base_pct_of_holdings": 0,
+            "downside_planned_base_pct_after_fill": downside_planned_pct_after_fill,
+            "max_downside_planned_base_pct_after_fill": max_downside_pct,
             "reason": (
                 f"Adaptive pullback limit is blocked because downside planned BTC allocation "
                 f"would be {downside_planned_pct_after_fill:.1f}%, above cap {max_downside_pct:.1f}%."
@@ -1436,7 +1481,7 @@ def build_pullback_limit_candidate_action(
         )
     )
 
-    estimated_btc_if_filled = order_usdt / suggested_limit_price if suggested_limit_price > 0 else 0
+    estimated_base_if_filled = order_usdt / suggested_limit_price if suggested_limit_price > 0 else 0
 
     return {
         "key": action_key,
@@ -1444,19 +1489,19 @@ def build_pullback_limit_candidate_action(
         "order_style": "pullback_limit",
         "signal": "PLACE MANUAL LIMIT BUY / PULLBACK ENTRY",
         "max_buy_usdt": order_usdt,
-        "max_sell_btc_pct_of_holdings": 0,
+        "max_sell_base_pct_of_holdings": 0,
         "recommended_order_type": "limit",
         "recommended_limit_price": suggested_limit_price,
         "pullback_offset_pct_from_current": ((price - suggested_limit_price) / price * 100),
-        "estimated_btc_if_filled": estimated_btc_if_filled,
+        "estimated_base_if_filled": estimated_base_if_filled,
         "expiry_guidance_hours": int(pullback_cfg.get("expiry_guidance_hours", 24) or 24),
         "exposure_tier": tier_name,
         "tier_reason": exposure_tier.get("reason"),
         "min_confidence_to_buy": min_confidence,
-        "max_upside_btc_pct_after_buy": max_upside_pct,
-        "max_downside_planned_btc_pct": max_downside_pct,
-        "upside_btc_pct_after_buy": upside_pct_after_fill,
-        "downside_planned_btc_pct_after_buy_and_open_orders": downside_planned_pct_after_fill,
+        "max_upside_base_pct_after_buy": max_upside_pct,
+        "max_downside_planned_base_pct": max_downside_pct,
+        "upside_base_pct_after_buy": upside_pct_after_fill,
+        "downside_planned_base_pct_after_buy_and_open_orders": downside_planned_pct_after_fill,
         "reason": (
             f"Adaptive pullback limit is allowed under {tier_name} tier. "
             f"Place a manual limit buy only if BTC pulls back to approximately "
@@ -1466,65 +1511,65 @@ def build_pullback_limit_candidate_action(
         ),
     }
 
-def calculate_btc_pct_after_sell(portfolio, market_price, sell_btc):
-    btc_now = float(portfolio.get("btc", 0) or 0)
+def calculate_base_pct_after_sell(portfolio, market_price, sell_btc):
+    base_now = float(portfolio.get(config.get("asset", {}).get("base", "BTC").lower(), 0) or 0)
     usdt_now = float(portfolio.get("usdt", 0) or 0)
 
-    remaining_btc = max(btc_now - sell_btc, 0)
+    remaining_btc = max(base_now - sell_btc, 0)
     sell_value = sell_btc * market_price
 
     estimated_usdt = usdt_now + sell_value
-    estimated_btc_value = remaining_btc * market_price
-    estimated_total_value = estimated_usdt + estimated_btc_value
+    estimated_base_value = remaining_btc * market_price
+    estimated_total_value = estimated_usdt + estimated_base_value
 
     if estimated_total_value <= 0:
         return 0.0
 
-    return estimated_btc_value / estimated_total_value * 100
+    return estimated_base_value / estimated_total_value * 100
 
 
-def calculate_sell_btc_for_target_pct(portfolio, market_price, target_btc_pct):
+def calculate_sell_btc_for_target_pct(portfolio, market_price, target_base_pct):
     """
     Estimate BTC amount to sell to reach target BTC allocation.
     This is approximate and ignores fees/slippage.
     """
-    btc_now = float(portfolio.get("btc", 0) or 0)
+    base_now = float(portfolio.get(config.get("asset", {}).get("base", "BTC").lower(), 0) or 0)
     usdt_now = float(portfolio.get("usdt", 0) or 0)
 
-    if btc_now <= 0 or market_price <= 0:
+    if base_now <= 0 or market_price <= 0:
         return 0.0
 
-    target_fraction = target_btc_pct / 100
+    target_fraction = target_base_pct / 100
     if target_fraction <= 0 or target_fraction >= 1:
         return 0.0
 
     # After selling x BTC:
-    # BTC value = (btc_now - x) * price
+    # BTC value = (base_now - x) * price
     # USDT = usdt_now + x * price
     # total value remains approximately constant before fees
-    total_value = usdt_now + btc_now * market_price
-    target_btc_value = total_value * target_fraction
-    target_btc = target_btc_value / market_price
+    total_value = usdt_now + base_now * market_price
+    target_base_value = total_value * target_fraction
+    target_btc = target_base_value / market_price
 
-    sell_btc = btc_now - target_btc
+    sell_btc = base_now - target_btc
     return max(sell_btc, 0.0)
 
 
-def calculate_btc_cost_basis_from_manual_lots(config, portfolio):
+def calculate_base_cost_basis_from_manual_lots(config, portfolio):
     """
     Calculate BTC weighted average entry from manual lots in config.
 
     This is safer than asking Gemini to guess.
     Gemini should only analyze the computed result.
     """
-    cost_cfg = config.get("btc_cost_basis", {})
+    cost_cfg = config.get("base_cost_basis", {})
 
     result = {
         "available": False,
         "method": cost_cfg.get("method", "manual_lots"),
         "avg_entry_price": 0.0,
         "covered_btc": 0.0,
-        "portfolio_btc": float(portfolio.get("btc", 0) or 0),
+        "portfolio_btc": float(portfolio.get(config.get("asset", {}).get("base", "BTC").lower(), 0) or 0),
         "coverage_pct": 0.0,
         "min_coverage_pct": float(cost_cfg.get("min_coverage_pct", 90) or 90),
         "total_cost_usdt": 0.0,
@@ -1548,19 +1593,19 @@ def calculate_btc_cost_basis_from_manual_lots(config, portfolio):
         if side != "buy":
             continue
 
-        amount_btc = float(lot.get("amount_btc", 0) or 0)
+        amount_base = float(lot.get("amount_base", 0) or 0)
         price_usdt = float(lot.get("price_usdt", 0) or 0)
-        fee_btc = float(lot.get("fee_btc", 0) or 0)
+        fee_base = float(lot.get("fee_base", 0) or 0)
 
-        if amount_btc <= 0 or price_usdt <= 0:
+        if amount_base <= 0 or price_usdt <= 0:
             continue
 
-        net_btc = max(amount_btc - fee_btc, 0)
+        net_btc = max(amount_base - fee_base, 0)
         if net_btc <= 0:
             continue
 
         total_btc += net_btc
-        total_cost += amount_btc * price_usdt
+        total_cost += amount_base * price_usdt
 
     portfolio_btc = result["portfolio_btc"]
 
@@ -1611,31 +1656,31 @@ def build_sell_candidate_actions(config, market, portfolio):
     if not sell_cfg.get("enabled", False):
         return actions
 
-    btc_pct = float(portfolio.get("btc_pct", 0) or 0)
-    btc_now = float(portfolio.get("btc", 0) or 0)
+    base_pct = float(portfolio.get("base_pct", 0) or 0)
+    base_now = float(portfolio.get(config.get("asset", {}).get("base", "BTC").lower(), 0) or 0)
     price = float(market.get("price", 0) or 0)
 
-    if btc_now <= 0 or price <= 0:
+    if base_now <= 0 or price <= 0:
         return actions
 
-    cost_basis = calculate_btc_cost_basis_from_manual_lots(
+    cost_basis = calculate_base_cost_basis_from_manual_lots(
         config=config,
         portfolio=portfolio,
     )
 
-    min_btc_pct_after_sell = float(sell_cfg.get("min_btc_pct_after_sell", 50))
-    max_single_sell_pct = float(sell_cfg.get("max_single_sell_btc_pct_of_holdings", 25))
+    min_base_pct_after_sell = float(sell_cfg.get("min_base_pct_after_sell", 50))
+    max_single_sell_pct = float(sell_cfg.get("max_single_sell_base_pct_of_holdings", 25))
 
-    if btc_pct < min_btc_pct_after_sell:
+    if base_pct < min_base_pct_after_sell:
         actions.append({
             "key": "HOLD_DO_NOT_SELL_UNDERALLOCATED",
             "type": "hold",
             "signal": "HOLD / DO NOT SELL UNDERALLOCATED",
             "max_buy_usdt": 0,
-            "max_sell_btc_pct_of_holdings": 0,
+            "max_sell_base_pct_of_holdings": 0,
             "cost_basis": cost_basis,
             "reason": (
-                "BTC allocation is below the minimum BTC allocation allowed after sell. "
+                "Base allocation is below the minimum BTC allocation allowed after sell. "
                 "Selling now may slow recovery."
             ),
         })
@@ -1657,23 +1702,23 @@ def build_sell_candidate_actions(config, market, portfolio):
                         max_single_sell_pct,
                     )
 
-                    sell_btc = btc_now * (sell_pct / 100)
-                    btc_pct_after_sell = calculate_btc_pct_after_sell(
+                    sell_btc = base_now * (sell_pct / 100)
+                    base_pct_after_sell = calculate_base_pct_after_sell(
                         portfolio=portfolio,
                         market_price=price,
                         sell_btc=sell_btc,
                     )
 
-                    if btc_pct_after_sell >= min_btc_pct_after_sell:
+                    if base_pct_after_sell >= min_base_pct_after_sell:
                         actions.append({
                             "key": "SELL_SMALL_TAKE_PROFIT",
                             "type": "sell",
                             "signal": "SELL SMALL / TAKE PROFIT",
                             "max_buy_usdt": 0,
-                            "max_sell_btc_pct_of_holdings": sell_pct,
+                            "max_sell_base_pct_of_holdings": sell_pct,
                             "estimated_sell_btc": sell_btc,
                             "estimated_sell_usdt": sell_btc * price,
-                            "estimated_btc_pct_after_sell": btc_pct_after_sell,
+                            "estimated_base_pct_after_sell": base_pct_after_sell,
                             "cost_basis": cost_basis,
                             "profit_pct_from_avg_entry": profit_pct,
                             "reason": (
@@ -1686,40 +1731,40 @@ def build_sell_candidate_actions(config, market, portfolio):
         rb_cfg = sell_cfg.get("rebalance", {})
 
         if rb_cfg.get("enabled", False):
-            sell_if_above = float(rb_cfg.get("sell_if_btc_pct_above", 75))
-            target_after = float(rb_cfg.get("target_btc_pct_after_sell", 65))
+            sell_if_above = float(rb_cfg.get("sell_if_base_pct_above", 75))
+            target_after = float(rb_cfg.get("target_base_pct_after_sell", 65))
 
-            if btc_pct > sell_if_above:
+            if base_pct > sell_if_above:
                 sell_btc = calculate_sell_btc_for_target_pct(
                     portfolio=portfolio,
                     market_price=price,
-                    target_btc_pct=target_after,
+                    target_base_pct=target_after,
                 )
 
-                max_sell_btc = btc_now * (max_single_sell_pct / 100)
+                max_sell_btc = base_now * (max_single_sell_pct / 100)
                 sell_btc = min(sell_btc, max_sell_btc)
 
                 if sell_btc > 0:
-                    sell_pct = (sell_btc / btc_now) * 100
-                    btc_pct_after_sell = calculate_btc_pct_after_sell(
+                    sell_pct = (sell_btc / base_now) * 100
+                    base_pct_after_sell = calculate_base_pct_after_sell(
                         portfolio=portfolio,
                         market_price=price,
                         sell_btc=sell_btc,
                     )
 
-                    if btc_pct_after_sell >= min_btc_pct_after_sell:
+                    if base_pct_after_sell >= min_base_pct_after_sell:
                         actions.append({
                             "key": "SELL_SMALL_REBALANCE_OVERWEIGHT",
                             "type": "sell",
                             "signal": "SELL SMALL / REBALANCE BTC OVERWEIGHT",
                             "max_buy_usdt": 0,
-                            "max_sell_btc_pct_of_holdings": sell_pct,
+                            "max_sell_base_pct_of_holdings": sell_pct,
                             "estimated_sell_btc": sell_btc,
                             "estimated_sell_usdt": sell_btc * price,
-                            "estimated_btc_pct_after_sell": btc_pct_after_sell,
+                            "estimated_base_pct_after_sell": base_pct_after_sell,
                             "cost_basis": cost_basis,
                             "reason": (
-                                f"BTC allocation is {btc_pct:.1f}%, above rebalance threshold "
+                                f"Base allocation is {base_pct:.1f}%, above rebalance threshold "
                                 f"{sell_if_above:.1f}%."
                             ),
                         })
@@ -1738,23 +1783,23 @@ def build_sell_candidate_actions(config, market, portfolio):
                     max_single_sell_pct,
                 )
 
-                sell_btc = btc_now * (sell_pct / 100)
-                btc_pct_after_sell = calculate_btc_pct_after_sell(
+                sell_btc = base_now * (sell_pct / 100)
+                base_pct_after_sell = calculate_base_pct_after_sell(
                     portfolio=portfolio,
                     market_price=price,
                     sell_btc=sell_btc,
                 )
 
-                if btc_pct_after_sell >= min_btc_pct_after_sell:
+                if base_pct_after_sell >= min_base_pct_after_sell:
                     actions.append({
                         "key": "SELL_SMALL_RISK_REDUCTION",
                         "type": "sell",
                         "signal": "SELL SMALL / RISK REDUCTION",
                         "max_buy_usdt": 0,
-                        "max_sell_btc_pct_of_holdings": sell_pct,
+                        "max_sell_base_pct_of_holdings": sell_pct,
                         "estimated_sell_btc": sell_btc,
                         "estimated_sell_usdt": sell_btc * price,
-                        "estimated_btc_pct_after_sell": btc_pct_after_sell,
+                        "estimated_base_pct_after_sell": base_pct_after_sell,
                         "cost_basis": cost_basis,
                         "reason": (
                             "BTC is below the configured MA20 breakdown threshold. "
@@ -1781,7 +1826,7 @@ def build_gemini_candidate_actions(config, market, portfolio, open_orders, intra
             "type": "hold",
             "signal": "HOLD",
             "max_buy_usdt": 0,
-            "max_sell_btc_pct_of_holdings": 0,
+            "max_sell_base_pct_of_holdings": 0,
             "reason": "Default safe action.",
         }
     ]
@@ -1794,7 +1839,7 @@ def build_gemini_candidate_actions(config, market, portfolio, open_orders, intra
         f"ma7={market.get('ma_7')} | "
         f"ma20={market.get('ma_20')} | "
         f"change_24h={market.get('change_24h')} | "
-        f"btc_pct={portfolio.get('btc_pct')} | "
+        f"base_pct={portfolio.get('base_pct')} | "
         f"usdt_free={portfolio.get('usdt_free')}",
         flush=True,
     )
@@ -1815,16 +1860,16 @@ def build_gemini_candidate_actions(config, market, portfolio, open_orders, intra
             "type": "hold",
             "signal": "HOLD / VERIFY POSSIBLE FILLED ORDER",
             "max_buy_usdt": 0,
-            "max_sell_btc_pct_of_holdings": 0,
+            "max_sell_base_pct_of_holdings": 0,
             "reason": "Possible order touch detected. Verify Tokocrypto before any new decision.",
         })
         return actions
 
-    if portfolio["btc_pct"] >= config["portfolio"]["target_btc_max_pct"]:
+    if portfolio["base_pct"] >= config["portfolio"]["target_base_max_pct"]:
         print(
-            "[BUY_GATE] note: btc_pct already above target max | "
-            f"btc_pct={portfolio['btc_pct']:.2f} | "
-            f"target_max={config['portfolio']['target_btc_max_pct']}",
+            "[BUY_GATE] note: base_pct already above target max | "
+            f"base_pct={portfolio['base_pct']:.2f} | "
+            f"target_max={config['portfolio']['target_base_max_pct']}",
             flush=True,
         )
 
@@ -1833,8 +1878,8 @@ def build_gemini_candidate_actions(config, market, portfolio, open_orders, intra
             "type": "hold",
             "signal": "HOLD / TOO MUCH BTC",
             "max_buy_usdt": 0,
-            "max_sell_btc_pct_of_holdings": 0,
-            "reason": "BTC allocation is already above target max.",
+            "max_sell_base_pct_of_holdings": 0,
+            "reason": "Base allocation is already above target max.",
         })
 
     has_open_orders = bool(open_orders)
@@ -1852,7 +1897,7 @@ def build_gemini_candidate_actions(config, market, portfolio, open_orders, intra
             "type": "hold",
             "signal": "HOLD / OPEN ORDERS ACTIVE",
             "max_buy_usdt": 0,
-            "max_sell_btc_pct_of_holdings": 0,
+            "max_sell_base_pct_of_holdings": 0,
             "reason": "Open buy orders are already active. Avoid accidental double entry unless bullish confirmation is strong.",
         })
 
@@ -1861,7 +1906,7 @@ def build_gemini_candidate_actions(config, market, portfolio, open_orders, intra
             "type": "hold",
             "signal": "HOLD / REVIEW LADDER",
             "max_buy_usdt": 0,
-            "max_sell_btc_pct_of_holdings": 0,
+            "max_sell_base_pct_of_holdings": 0,
             "reason": "BTC may be improving, but existing downside ladder should be reviewed before adding exposure.",
         })
 
@@ -1887,11 +1932,11 @@ def build_gemini_candidate_actions(config, market, portfolio, open_orders, intra
             return actions
 
     if decision_cfg.get("require_btc_below_target_min", True):
-        if portfolio["btc_pct"] >= config["portfolio"]["target_btc_min_pct"]:
+        if portfolio["base_pct"] >= config["portfolio"]["target_base_min_pct"]:
             print(
-                "[BUY_GATE] blocked: btc_pct already >= target min | "
-                f"btc_pct={portfolio['btc_pct']:.2f} | "
-                f"target_min={config['portfolio']['target_btc_min_pct']}",
+                "[BUY_GATE] blocked: base_pct already >= target min | "
+                f"base_pct={portfolio['base_pct']:.2f} | "
+                f"target_min={config['portfolio']['target_base_min_pct']}",
                 flush=True,
             )
             return actions
@@ -1931,7 +1976,7 @@ def build_gemini_candidate_actions(config, market, portfolio, open_orders, intra
             "type": "hold",
             "signal": "HOLD / OVERHEATED NO FOMO",
             "max_buy_usdt": 0,
-            "max_sell_btc_pct_of_holdings": 0,
+            "max_sell_base_pct_of_holdings": 0,
             "exposure_tier": exposure_tier.get("name"),
             "reason": exposure_tier.get("reason", "BTC is overheated. Fresh buy blocked."),
         })
@@ -1969,21 +2014,21 @@ def build_gemini_candidate_actions(config, market, portfolio, open_orders, intra
 
     tier_settings = exposure_tier.get("settings", {})
 
-    upside_pct = calculate_upside_btc_pct_after_buy(
+    upside_pct = calculate_upside_base_pct_after_buy(
         portfolio=portfolio,
         market_price=market["price"],
         buy_usdt=max_buy,
     )
 
-    downside_planned_pct = calculate_planned_btc_exposure_pct(
+    downside_planned_pct = calculate_planned_base_exposure_pct(
         config=config,
         portfolio=portfolio,
         market_price=market["price"],
         extra_buy_usdt=max_buy,
     )
 
-    max_upside_pct = float(tier_settings.get("max_upside_btc_pct_after_buy", 35))
-    max_downside_pct = float(tier_settings.get("max_downside_planned_btc_pct", 55))
+    max_upside_pct = float(tier_settings.get("max_upside_base_pct_after_buy", 35))
+    max_downside_pct = float(tier_settings.get("max_downside_planned_base_pct", 55))
     tier_min_confidence = int(tier_settings.get("min_confidence_to_buy", decision_cfg.get("min_confidence_to_buy", 80)))
 
     print(
@@ -2021,7 +2066,7 @@ def build_gemini_candidate_actions(config, market, portfolio, open_orders, intra
             "type": "hold",
             "signal": "HOLD / RECENT MANUAL BUY ANTI-REPEAT",
             "max_buy_usdt": 0,
-            "max_sell_btc_pct_of_holdings": 0,
+            "max_sell_base_pct_of_holdings": 0,
             "latest_manual_buy": anti_repeat.get("latest_buy"),
             "hours_since_last_buy": anti_repeat.get("hours_since_last_buy"),
             "price_move_pct_from_last_buy": anti_repeat.get("price_move_pct_from_last_buy"),
@@ -2054,14 +2099,14 @@ def build_gemini_candidate_actions(config, market, portfolio, open_orders, intra
         "type": "buy",
         "signal": "BUY SMALL / BULLISH CONFIRMATION WITH LADDER ACTIVE",
         "max_buy_usdt": max_buy,
-        "max_sell_btc_pct_of_holdings": 0,
+        "max_sell_base_pct_of_holdings": 0,
         "exposure_tier": exposure_tier.get("name"),
         "tier_reason": exposure_tier.get("reason"),
         "min_confidence_to_buy": tier_min_confidence,
-        "max_upside_btc_pct_after_buy": max_upside_pct,
-        "max_downside_planned_btc_pct": max_downside_pct,
-        "upside_btc_pct_after_buy": upside_pct,
-        "downside_planned_btc_pct_after_buy_and_open_orders": downside_planned_pct,
+        "max_upside_base_pct_after_buy": max_upside_pct,
+        "max_downside_planned_base_pct": max_downside_pct,
+        "upside_base_pct_after_buy": upside_pct,
+        "downside_planned_base_pct_after_buy_and_open_orders": downside_planned_pct,
         "reason": (
             f"Tiered exposure policy allows a small buy under {exposure_tier.get('name')} tier. "
             f"Upside BTC allocation after buy: {upside_pct:.1f}% / cap {max_upside_pct:.1f}%. "
@@ -2117,7 +2162,7 @@ def apply_gemini_decision_with_guards(
     action_key = gemini_review.get("recommended_action_key", "HOLD")
     confidence = int(float(gemini_review.get("confidence_score", 0) or 0))
     requested_buy = float(gemini_review.get("recommended_buy_usdt", 0) or 0)
-    requested_sell_pct = float(gemini_review.get("recommended_sell_btc_pct_of_holdings", 0) or 0)
+    requested_sell_pct = float(gemini_review.get("recommended_sell_base_pct_of_holdings", 0) or 0)
 
     action_map = {
         action["key"]: action
@@ -2175,21 +2220,21 @@ def apply_gemini_decision_with_guards(
                 "reason": "Buying would reduce USDT free balance below emergency reserve.",
             }
 
-        upside_pct = calculate_upside_btc_pct_after_buy(
+        upside_pct = calculate_upside_base_pct_after_buy(
             portfolio=portfolio,
             market_price=market["price"],
             buy_usdt=buy_usdt,
         )
 
-        downside_planned_pct = calculate_planned_btc_exposure_pct(
+        downside_planned_pct = calculate_planned_base_exposure_pct(
             config=config,
             portfolio=portfolio,
             market_price=market["price"],
             extra_buy_usdt=buy_usdt,
         )
 
-        max_upside_pct = float(selected_action.get("max_upside_btc_pct_after_buy", 35))
-        max_downside_pct = float(selected_action.get("max_downside_planned_btc_pct", 55))
+        max_upside_pct = float(selected_action.get("max_upside_base_pct_after_buy", 35))
+        max_downside_pct = float(selected_action.get("max_downside_planned_base_pct", 55))
 
         if upside_pct > max_upside_pct:
             return {
@@ -2224,20 +2269,20 @@ def apply_gemini_decision_with_guards(
 
         if selected_action.get("order_style") == "pullback_limit":
             limit_price = float(selected_action.get("recommended_limit_price", 0) or 0)
-            estimated_btc = float(selected_action.get("estimated_btc_if_filled", 0) or 0)
+            estimated_base = float(selected_action.get("estimated_base_if_filled", 0) or 0)
 
             decision_result.update({
                 "order_style": "pullback_limit",
                 "recommended_order_type": "limit",
                 "recommended_limit_price": limit_price,
-                "estimated_btc_if_filled": estimated_btc,
+                "estimated_base_if_filled": estimated_base,
                 "expiry_guidance_hours": selected_action.get("expiry_guidance_hours"),
                 "reason": (
                     f"Gemini selected {action_key} with {confidence}/100 confidence. "
                     f"Risk guard approved an adaptive manual pullback limit under "
                     f"{selected_action.get('exposure_tier', 'unknown')} tier. "
                     f"Recommended manual limit: {buy_usdt:.2f} USDT @ ${limit_price:,.0f}. "
-                    f"Estimated BTC if filled: {estimated_btc:.8f}. "
+                    f"Estimated BTC if filled: {estimated_base:.8f}. "
                     f"BTC allocation after fill: {upside_pct:.1f}%. "
                     f"Downside planned BTC allocation if all buy orders fill: {downside_planned_pct:.1f}%."
                 ),
@@ -2257,15 +2302,15 @@ def apply_gemini_decision_with_guards(
                 ),
             }
 
-        btc_now = float(portfolio.get("btc", 0) or 0)
-        if btc_now <= 0:
+        base_now = float(portfolio.get(config.get("asset", {}).get("base", "BTC").lower(), 0) or 0)
+        if base_now <= 0:
             return {
                 "signal": "HOLD / NO BTC TO SELL",
                 "action_usdt": 0,
                 "reason": "Portfolio BTC balance is zero or unavailable.",
             }
 
-        max_sell_pct = float(selected_action.get("max_sell_btc_pct_of_holdings", 0) or 0)
+        max_sell_pct = float(selected_action.get("max_sell_base_pct_of_holdings", 0) or 0)
         sell_pct = min(requested_sell_pct, max_sell_pct)
 
         if sell_pct <= 0:
@@ -2278,25 +2323,25 @@ def apply_gemini_decision_with_guards(
                 "reason": "Selected sell action has zero allowed sell size.",
             }
 
-        sell_btc = btc_now * (sell_pct / 100)
+        sell_btc = base_now * (sell_pct / 100)
         sell_usdt_estimate = sell_btc * market["price"]
 
         sell_cfg = config.get("sell_strategy", {})
-        min_btc_pct_after_sell = float(sell_cfg.get("min_btc_pct_after_sell", 50))
+        min_base_pct_after_sell = float(sell_cfg.get("min_base_pct_after_sell", 50))
 
-        btc_pct_after_sell = calculate_btc_pct_after_sell(
+        base_pct_after_sell = calculate_base_pct_after_sell(
             portfolio=portfolio,
             market_price=market["price"],
             sell_btc=sell_btc,
         )
 
-        if btc_pct_after_sell < min_btc_pct_after_sell:
+        if base_pct_after_sell < min_base_pct_after_sell:
             return {
                 "signal": "HOLD / GEMINI SELL BLOCKED BY BTC ALLOCATION",
                 "action_usdt": 0,
                 "reason": (
-                    f"BTC allocation after sell would become {btc_pct_after_sell:.1f}%, "
-                    f"below required minimum {min_btc_pct_after_sell:.1f}%."
+                    f"BTC allocation after sell would become {base_pct_after_sell:.1f}%, "
+                    f"below required minimum {min_base_pct_after_sell:.1f}%."
                 ),
             }
 
@@ -2306,12 +2351,12 @@ def apply_gemini_decision_with_guards(
             "sell_btc": sell_btc,
             "sell_usdt_estimate": sell_usdt_estimate,
             "sell_pct_of_holdings": sell_pct,
-            "btc_pct_after_sell": btc_pct_after_sell,
+            "base_pct_after_sell": base_pct_after_sell,
             "reason": (
                 f"Gemini selected {action_key} with {confidence}/100 confidence. "
                 f"Risk guard approved. Estimated sell: {sell_btc:.8f} BTC "
                 f"(~{sell_usdt_estimate:.2f} USDT). "
-                f"Estimated BTC allocation after sell: {btc_pct_after_sell:.1f}%."
+                f"Estimated BTC allocation after sell: {base_pct_after_sell:.1f}%."
             ),
         }
 
@@ -2342,7 +2387,7 @@ def format_gemini_decision_text(config, gemini_review, candidate_actions, final_
 
     action_key = gemini_review.get("recommended_action_key", "HOLD")
     buy_usdt = float(gemini_review.get("recommended_buy_usdt", 0) or 0)
-    sell_pct = float(gemini_review.get("recommended_sell_btc_pct_of_holdings", 0) or 0)
+    sell_pct = float(gemini_review.get("recommended_sell_base_pct_of_holdings", 0) or 0)
     confidence = gemini_review.get("confidence_score", 0)
 
     mode = (
@@ -2457,42 +2502,47 @@ def format_ai_review_from_gemini_decision_json(ai_data):
 # Tokocrypto read-only private data
 # ============================================================
 
-def fetch_tokocrypto_portfolio():
+def fetch_tokocrypto_portfolio(config=None):
     """
     Read-only portfolio fetch.
     Tidak melakukan order, cancel, atau withdrawal.
     """
+    asset = get_asset_config(config) if config else {"base": "BTC", "quote": "USDT"}
+    base = asset.get("base", "BTC")
+    quote = asset.get("quote", "USDT")
+
     exchange = build_tokocrypto_exchange(private=True)
     balance = exchange.fetch_balance()
 
-    btc_info = balance.get("BTC", {})
-    usdt_info = balance.get("USDT", {})
+    base_info = balance.get(base, {})
+    quote_info = balance.get(quote, {})
 
-    btc_free = float(btc_info.get("free") or 0)
-    btc_used = float(btc_info.get("used") or 0)
-    btc_total = float(btc_info.get("total") or 0)
+    base_free = float(base_info.get("free") or 0)
+    base_used = float(base_info.get("used") or 0)
+    base_total = float(base_info.get("total") or 0)
 
-    usdt_free = float(usdt_info.get("free") or 0)
-    usdt_used = float(usdt_info.get("used") or 0)
-    usdt_total = float(usdt_info.get("total") or 0)
+    quote_free = float(quote_info.get("free") or 0)
+    quote_used = float(quote_info.get("used") or 0)
+    quote_total = float(quote_info.get("total") or 0)
 
     return {
-        "btc_free": btc_free,
-        "btc_used": btc_used,
-        "btc_total": btc_total,
-        "usdt_free": usdt_free,
-        "usdt_used": usdt_used,
-        "usdt_total": usdt_total,
+        "base_free": base_free,
+        "base_used": base_used,
+        "base_total": base_total,
+        "usdt_free": quote_free,
+        "usdt_used": quote_used,
+        "usdt_total": quote_total,
         "source": "Tokocrypto private read-only",
     }
 
 
-def fetch_tokocrypto_open_orders():
+def fetch_tokocrypto_open_orders(config=None):
     try:
         print("DEBUG: trying Tokocrypto open orders...", flush=True)
+        symbol = config.get("symbol", "BTC/USDT") if config else "BTC/USDT"
 
         exchange = build_tokocrypto_exchange(private=True)
-        orders = exchange.fetch_open_orders("BTC/USDT")
+        orders = exchange.fetch_open_orders(symbol)
 
         simplified = []
         for order in orders:
@@ -2585,11 +2635,11 @@ def calculate_portfolio(config, price):
 
             remote = fetch_tokocrypto_portfolio()
 
-            btc = float(remote["btc_total"])
+            btc = float(remote["base_total"])
             usdt = float(remote["usdt_total"])
 
-            btc_free = float(remote["btc_free"])
-            btc_used = float(remote["btc_used"])
+            base_free = float(remote["base_free"])
+            base_used = float(remote["base_used"])
             usdt_free = float(remote["usdt_free"])
             usdt_used = float(remote["usdt_used"])
 
@@ -2603,8 +2653,8 @@ def calculate_portfolio(config, price):
             usdt = float(config["portfolio"]["usdt"])
             btc = float(config["portfolio"]["btc"])
 
-            btc_free = btc
-            btc_used = 0
+            base_free = btc
+            base_used = 0
             usdt_free = usdt
             usdt_used = 0
 
@@ -2622,8 +2672,8 @@ def calculate_portfolio(config, price):
             if order.get("status") == "open" and order.get("side") == "buy":
                 manual_usdt_used += float(order.get("allocated_usdt", 0) or 0)
 
-        btc_free = btc
-        btc_used = 0
+        base_free = btc
+        base_used = 0
         usdt_used = manual_usdt_used
         usdt_free = max(usdt - usdt_used, 0)
 
@@ -2638,21 +2688,21 @@ def calculate_portfolio(config, price):
             #portfolio_error = "Tokocrypto private balance disabled in config_git.yaml"
             portfolio_error = "Tokocrypto private balance disabled in GitHub mode; using config portfolio."
 
-    btc_value = btc * price
-    total_value = usdt + btc_value
-    btc_pct = (btc_value / total_value) * 100 if total_value > 0 else 0
-    usdt_pct = 100 - btc_pct
+    base_value = btc * price
+    total_value = usdt + base_value
+    base_pct = (base_value / total_value) * 100 if total_value > 0 else 0
+    usdt_pct = 100 - base_pct
 
     return {
         "usdt": usdt,
         "btc": btc,
-        "btc_free": btc_free,
-        "btc_used": btc_used,
+        "base_free": base_free,
+        "base_used": base_used,
         "usdt_free": usdt_free,
         "usdt_used": usdt_used,
-        "btc_value": btc_value,
+        "base_value": base_value,
         "total_value": total_value,
-        "btc_pct": btc_pct,
+        "base_pct": base_pct,
         "usdt_pct": usdt_pct,
         "source": portfolio_source,
         "error": portfolio_error,
@@ -2668,12 +2718,12 @@ def decide_signal(config, market, portfolio):
     strategy = config["strategy"]
     mental = config["mental"]
 
-    target_min = config["portfolio"]["target_btc_min_pct"]
-    target_max = config["portfolio"]["target_btc_max_pct"]
+    target_min = config["portfolio"]["target_base_min_pct"]
+    target_max = config["portfolio"]["target_base_max_pct"]
     max_buy = config["portfolio"]["max_single_buy_usdt"]
     reserve = config["portfolio"]["emergency_usdt_reserve"]
 
-    btc_pct = portfolio["btc_pct"]
+    base_pct = portfolio["base_pct"]
     available_usdt_after_reserve = max(0, portfolio["usdt_free"] - reserve)
 
     if mental["state"] == "panic" and strategy["no_trade_when_panic"]:
@@ -2690,12 +2740,12 @@ def decide_signal(config, market, portfolio):
             "reason": "BTC naik tajam dalam 24 jam. Hindari market buy besar. Tunggu pullback/retest.",
         }
 
-    if btc_pct >= target_max:
+    if base_pct >= target_max:
         return {
             "signal": "HOLD / TOO MUCH BTC",
             "action_usdt": 0,
             "reason": (
-                f"Alokasi BTC sudah {btc_pct:.1f}%, mendekati/di atas batas target "
+                f"Alokasi BTC sudah {base_pct:.1f}%, mendekati/di atas batas target "
                 f"{target_max}%. Jangan tambah BTC."
             ),
         }
@@ -2721,7 +2771,7 @@ def decide_signal(config, market, portfolio):
         strategy["allow_dip_buy"]
         and market["from_7d_high"] <= risk["deep_dip_from_7d_high_pct"]
         and available_usdt_after_reserve > 0
-        and btc_pct < target_max
+        and base_pct < target_max
     ):
         action = min(max_buy, available_usdt_after_reserve)
         return {
@@ -2729,7 +2779,7 @@ def decide_signal(config, market, portfolio):
             "action_usdt": action,
             "reason": (
                 f"BTC turun {market['from_7d_high']:.1f}% dari 7d high. "
-                f"Alokasi BTC masih {btc_pct:.1f}%. Boleh buy kecil, bukan all-in."
+                f"Alokasi BTC masih {base_pct:.1f}%. Boleh buy kecil, bukan all-in."
             ),
         }
 
@@ -2738,7 +2788,7 @@ def decide_signal(config, market, portfolio):
         and market["from_7d_high"] <= risk["dip_from_7d_high_pct"]
         and market["from_7d_low"] <= risk["near_7d_low_pct"]
         and available_usdt_after_reserve > 0
-        and btc_pct < target_min
+        and base_pct < target_min
     ):
         action = min(max_buy * 0.75, available_usdt_after_reserve)
         return {
@@ -2746,7 +2796,7 @@ def decide_signal(config, market, portfolio):
             "action_usdt": action,
             "reason": (
                 "BTC dekat low 7 hari dan sedang diskon dari 7d high. "
-                f"Alokasi BTC masih rendah ({btc_pct:.1f}%)."
+                f"Alokasi BTC masih rendah ({base_pct:.1f}%)."
             ),
         }
 
@@ -2755,7 +2805,7 @@ def decide_signal(config, market, portfolio):
         and market["regime"] == "bullish_recovery"
         and market["above_ma_20"] >= risk["confirmation_above_ma_pct"]
         and available_usdt_after_reserve > 0
-        and btc_pct < target_min
+        and base_pct < target_min
     ):
         action = min(max_buy, available_usdt_after_reserve)
         return {
@@ -2763,7 +2813,7 @@ def decide_signal(config, market, portfolio):
             "action_usdt": action,
             "reason": (
                 "BTC berada di atas MA7 dan MA20, indikasi recovery. "
-                f"Alokasi BTC masih {btc_pct:.1f}%, boleh tambah kecil."
+                f"Alokasi BTC masih {base_pct:.1f}%, boleh tambah kecil."
             ),
         }
 
@@ -3028,6 +3078,7 @@ def is_model_available(config, model, daily_limit):
 
     return True, f"model available: {requests_today}/{usable_limit}"
 
+
 def record_llm_model_usage(
     config,
     model,
@@ -3263,7 +3314,7 @@ def build_rule_summary_for_llm(
     intrahour_order_events=None,
     candidate_actions=None,
 ):
-    cost_basis = calculate_btc_cost_basis_from_manual_lots(
+    cost_basis = calculate_base_cost_basis_from_manual_lots(
         config=config,
         portfolio=portfolio,
     )
@@ -3290,19 +3341,19 @@ def build_rule_summary_for_llm(
             "above_ma_20": market.get("above_ma_20"),
         },
         "portfolio": {
-            "btc": portfolio["btc"],
+            "btc": portfolio[config.get("asset", {}).get("base", "BTC").lower()],
             "usdt": portfolio["usdt"],
-            "btc_pct": portfolio["btc_pct"],
+            "base_pct": portfolio["base_pct"],
             "usdt_pct": portfolio["usdt_pct"],
             "total_value": portfolio["total_value"],
             "usdt_free": portfolio["usdt_free"],
             "usdt_used": portfolio["usdt_used"],
             "source": portfolio.get("source"),
-            "target_btc_min_pct": config["portfolio"]["target_btc_min_pct"],
-            "target_btc_max_pct": config["portfolio"]["target_btc_max_pct"],
+            "target_base_min_pct": config["portfolio"]["target_base_min_pct"],
+            "target_base_max_pct": config["portfolio"]["target_base_max_pct"],
             "emergency_usdt_reserve": config["portfolio"]["emergency_usdt_reserve"],
         },
-        "btc_cost_basis_computed": cost_basis,
+        "base_cost_basis_computed": cost_basis,
         "exposure_tier_computed": exposure_tier,
         "base_rule_decision": decision,
         "open_orders": open_orders[:5],
@@ -3310,7 +3361,7 @@ def build_rule_summary_for_llm(
         "candidate_actions": candidate_actions or [],
         "gemini_decision_config": config.get("gemini_decision", {}),
         "sell_strategy": config.get("sell_strategy", {}),
-        "btc_cost_basis_config": config.get("btc_cost_basis", {}),
+        "base_cost_basis_config": config.get("base_cost_basis", {}),
     }
 
 def salvage_gemini_decision_from_partial_json(raw_text, action_keys):
@@ -3405,7 +3456,7 @@ def salvage_gemini_decision_from_partial_json(raw_text, action_keys):
         return None
 
     recommended_buy = extract_number("recommended_buy_usdt", 0.0)
-    recommended_sell_pct = extract_number("recommended_sell_btc_pct_of_holdings", 0.0)
+    recommended_sell_pct = extract_number("recommended_sell_base_pct_of_holdings", 0.0)
     confidence_score = extract_number("confidence_score", 0.0)
 
     # Extra fallback for common malformed text:
@@ -3432,7 +3483,7 @@ def salvage_gemini_decision_from_partial_json(raw_text, action_keys):
     return {
         "recommended_action_key": action_key,
         "recommended_buy_usdt": recommended_buy,
-        "recommended_sell_btc_pct_of_holdings": recommended_sell_pct,
+        "recommended_sell_base_pct_of_holdings": recommended_sell_pct,
         "agreement_with_rule": agreement,
         "confidence_score": int(round(confidence_score)),
         "market_thesis": (
@@ -3478,8 +3529,11 @@ def fetch_macro_grounding_context(config, api_key):
     if "3.5" in model:
         model = "gemini-2.5-flash"
 
+    asset = get_asset_config(config)
+    asset_name = asset.get("name", "Bitcoin")
+
     prompt = (
-        "Search the web for the latest Bitcoin macro news, ETF flows, and market sentiment today. "
+        f"Search the web for the latest {asset_name} macro news, events, and market sentiment today. "
         "Summarize the current market context in 3 concise bullet points. "
         "Focus on facts, not price predictions."
     )
@@ -3559,7 +3613,7 @@ def generate_gemini_explanation(
             "ai_explanation": "",
             "recommended_action_key": "HOLD",
             "recommended_buy_usdt": 0,
-            "recommended_sell_btc_pct_of_holdings": 0,
+            "recommended_sell_base_pct_of_holdings": 0,
             "confidence_score": 0,
             "error": "llm disabled",
         }
@@ -3592,7 +3646,7 @@ def generate_gemini_explanation(
             "ai_explanation": ai_error_fallback,
             "recommended_action_key": "HOLD",
             "recommended_buy_usdt": 0,
-            "recommended_sell_btc_pct_of_holdings": 0,
+            "recommended_sell_base_pct_of_holdings": 0,
             "confidence_score": 0,
             "error": reason,
         }
@@ -3616,7 +3670,7 @@ def generate_gemini_explanation(
             "type": "hold",
             "signal": "HOLD",
             "max_buy_usdt": 0,
-            "max_sell_btc_pct_of_holdings": 0,
+            "max_sell_base_pct_of_holdings": 0,
             "reason": "Default safe action.",
         }
     ]
@@ -3678,15 +3732,18 @@ Macro Market News:
 {macro_context}
 """
 
+    asset = get_asset_config(config)
+    base = asset.get("base", "BTC")
+
     prompt = f"""
-You are a BTC decision-support analyst for a manual-only BTC Discipline Agent.
+You are a decision-support analyst for a manual-only {base} Discipline Agent.
 
 The bot is NOT allowed to trade.
 The user manually executes decisions.
 You must choose exactly one action from candidate_actions.
 Do not invent a new action.
 Do not recommend more than max_buy_usdt from the selected action.
-Do not recommend more than max_sell_btc_pct_of_holdings from the selected action.
+Do not recommend more than max_sell_base_pct_of_holdings from the selected action.
 Do not override hard risk guards.
 Do not recommend leverage, futures, margin, all-in, auto-trading, order cancellation, or withdrawal.
 
@@ -3708,22 +3765,22 @@ Candidate action keys you may choose:
 Decision rules:
 - recommended_action_key must be exactly one candidate action key.
 - recommended_buy_usdt must be 0 if selected action max_buy_usdt is 0.
-- recommended_sell_btc_pct_of_holdings must be 0 if selected action max_sell_btc_pct_of_holdings is 0.
+- recommended_sell_base_pct_of_holdings must be 0 if selected action max_sell_base_pct_of_holdings is 0.
 - If choosing a buy action, recommended_buy_usdt must be small and <= max_buy_usdt.
-- If choosing a sell action, recommended_sell_btc_pct_of_holdings must be <= max_sell_btc_pct_of_holdings.
+- If choosing a sell action, recommended_sell_base_pct_of_holdings must be <= max_sell_base_pct_of_holdings.
 - If open orders are active, a buy action is allowed only when BUY_SMALL_CONFIRMATION_WITH_LADDER is present in candidate_actions.
 - Treat BUY_SMALL_CONFIRMATION_WITH_LADDER as upside participation, not FOMO.
 - Existing lower limit orders remain a downside ladder.
 - If choosing a buy action, respect the selected exposure_tier.
 - For early_confirmation tier, be stricter: buy only if momentum is constructive but not overheated.
 - For confirmed_breakout tier, a larger buy is allowed only if the action max_buy_usdt allows it.
-- Explain both upside_btc_pct_after_buy and downside_planned_btc_pct_after_buy_and_open_orders if choosing a buy action.
+- Explain both upside_base_pct_after_buy and downside_planned_base_pct_after_buy_and_open_orders if choosing a buy action.
 - Do not recommend buy if exposure_tier is overheated or HOLD_OVERHEATED_NO_FOMO is present.
 - Sell actions are for planned take-profit or rebalancing only, not panic.
 - Do not estimate or invent average entry price yourself.
-- Use btc_cost_basis_computed only if available=true.
-- If btc_cost_basis_computed.available=false, do not claim the portfolio is in profit based on cost basis.
-- If BTC allocation is below target and sell action is not explicitly available, do not recommend sell.
+- Use base_cost_basis_computed only if available=true.
+- If base_cost_basis_computed.available=false, do not claim the portfolio is in profit based on cost basis.
+- If Base allocation is below target and sell action is not explicitly available, do not recommend sell.
 - If HOLD_DO_NOT_SELL_UNDERALLOCATED is available, respect that selling may slow recovery.
 - If HOLD_OPEN_ORDERS_ACTIVE is better, explain why waiting is better.
 - If HOLD_REVIEW_LADDER is better, explain that market may be improving but ladder should be reviewed.
@@ -3731,9 +3788,9 @@ Decision rules:
 - Do not claim a possible fill is confirmed.
 
 Allocation interpretation:
-- If btc_pct is below target_btc_min_pct, say BTC allocation is BELOW TARGET for recovery mode.
-- If btc_pct is between target_btc_min_pct and target_btc_max_pct, say it is within target range.
-- If btc_pct is above target_btc_max_pct, say it is too aggressive.
+- If base_pct is below target_base_min_pct, say Base allocation is BELOW TARGET for recovery mode.
+- If base_pct is between target_base_min_pct and target_base_max_pct, say it is within target range.
+- If base_pct is above target_base_max_pct, say it is too aggressive.
 
 Return ONLY valid JSON.
 No Markdown.
@@ -3748,7 +3805,7 @@ Use exactly this schema:
 {{
   "recommended_action_key": "one candidate action key",
   "recommended_buy_usdt": 0,
-  "recommended_sell_btc_pct_of_holdings": 0,
+  "recommended_sell_base_pct_of_holdings": 0,
   "agreement_with_rule": "agree | cautious_agree | disagree_but_do_not_override",
   "confidence_score": 0,
   "market_thesis": "concise market thesis",
@@ -3883,7 +3940,7 @@ Data:
         if recommended_key not in action_keys:
             ai_data["recommended_action_key"] = "HOLD"
             ai_data["recommended_buy_usdt"] = 0
-            ai_data["recommended_sell_btc_pct_of_holdings"] = 0
+            ai_data["recommended_sell_base_pct_of_holdings"] = 0
             ai_data["risk_assessment"] = (
                 str(ai_data.get("risk_assessment", "")) +
                 " Gemini originally recommended an action outside allowed actions, so it was forced to HOLD."
@@ -3895,7 +3952,7 @@ Data:
             recommended_buy = 0
 
         try:
-            recommended_sell_pct = float(ai_data.get("recommended_sell_btc_pct_of_holdings", 0) or 0)
+            recommended_sell_pct = float(ai_data.get("recommended_sell_base_pct_of_holdings", 0) or 0)
         except Exception:
             recommended_sell_pct = 0
 
@@ -3914,7 +3971,7 @@ Data:
             "ai_explanation": ai_explanation,
             "recommended_action_key": ai_data.get("recommended_action_key", "HOLD"),
             "recommended_buy_usdt": recommended_buy,
-            "recommended_sell_btc_pct_of_holdings": recommended_sell_pct,
+            "recommended_sell_base_pct_of_holdings": recommended_sell_pct,
             "confidence_score": confidence_score,
             "agreement_with_rule": ai_data.get("agreement_with_rule", ""),
             "market_thesis": ai_data.get("market_thesis", ""),
@@ -4021,7 +4078,7 @@ def calculate_recovery_status(config, portfolio):
 
 
 def calculate_price_scenarios(portfolio, price_levels):
-    btc = float(portfolio["btc"])
+    btc = float(portfolio[config.get("asset", {}).get("base", "BTC").lower()])
     usdt = float(portfolio["usdt"])
 
     scenarios = []
@@ -4046,7 +4103,7 @@ def build_scenario_text(portfolio):
         )
 
     return "\n".join(lines)
-
+    
 # ============================================================
 # Message formatting
 # ============================================================
@@ -4070,7 +4127,7 @@ def format_action_key_line(action):
     key = action.get("key", "UNKNOWN")
     action_type = action.get("type", "hold")
     max_buy = float(action.get("max_buy_usdt", 0) or 0)
-    max_sell_pct = float(action.get("max_sell_btc_pct_of_holdings", 0) or 0)
+    max_sell_pct = float(action.get("max_sell_base_pct_of_holdings", 0) or 0)
 
     if key == "HOLD_RECENT_MANUAL_BUY_ANTI_REPEAT":
         hours_since = action.get("hours_since_last_buy")
@@ -4148,13 +4205,13 @@ def format_guardrail_check(config, market, portfolio, base_decision,
     has_open_orders = bool(open_orders)
     possible_fill = bool(intrahour_order_events.get("has_possible_fill", False))
 
-    target_min = float(config["portfolio"]["target_btc_min_pct"])
-    target_max = float(config["portfolio"]["target_btc_max_pct"])
-    btc_pct = float(portfolio.get("btc_pct", 0) or 0)
+    target_min = float(config["portfolio"]["target_base_min_pct"])
+    target_max = float(config["portfolio"]["target_base_max_pct"])
+    base_pct = float(portfolio.get("base_pct", 0) or 0)
 
-    if btc_pct < target_min:
+    if base_pct < target_min:
         allocation_status = "below target"
-    elif btc_pct > target_max:
+    elif base_pct > target_max:
         allocation_status = "above target"
     else:
         allocation_status = "within target"
@@ -4171,8 +4228,8 @@ def format_guardrail_check(config, market, portfolio, base_decision,
     if buy_candidate:
         buy_gate_status = "open"
         exposure_tier = buy_candidate.get("exposure_tier", "-")
-        upside_pct = buy_candidate.get("upside_btc_pct_after_buy")
-        downside_pct = buy_candidate.get("downside_planned_btc_pct_after_buy_and_open_orders")
+        upside_pct = buy_candidate.get("upside_base_pct_after_buy")
+        downside_pct = buy_candidate.get("downside_planned_base_pct_after_buy_and_open_orders")
 
         exposure_text = (
             f"Exposure tier: {exposure_tier}\n"
@@ -4184,8 +4241,8 @@ def format_guardrail_check(config, market, portfolio, base_decision,
         exposure_tier = pullback_candidate.get("exposure_tier", "-")
         limit_price = float(pullback_candidate.get("recommended_limit_price", 0) or 0)
         order_usdt = float(pullback_candidate.get("max_buy_usdt", 0) or 0)
-        upside_pct = pullback_candidate.get("upside_btc_pct_after_buy")
-        downside_pct = pullback_candidate.get("downside_planned_btc_pct_after_buy_and_open_orders")
+        upside_pct = pullback_candidate.get("upside_base_pct_after_buy")
+        downside_pct = pullback_candidate.get("downside_planned_base_pct_after_buy_and_open_orders")
 
         exposure_text = (
             f"{anti_repeat_action.get('reason', 'Recent manual buy already executed.')}\n"
@@ -4199,8 +4256,8 @@ def format_guardrail_check(config, market, portfolio, base_decision,
         exposure_tier = pullback_candidate.get("exposure_tier", "-")
         limit_price = float(pullback_candidate.get("recommended_limit_price", 0) or 0)
         order_usdt = float(pullback_candidate.get("max_buy_usdt", 0) or 0)
-        upside_pct = pullback_candidate.get("upside_btc_pct_after_buy")
-        downside_pct = pullback_candidate.get("downside_planned_btc_pct_after_buy_and_open_orders")
+        upside_pct = pullback_candidate.get("upside_base_pct_after_buy")
+        downside_pct = pullback_candidate.get("downside_planned_base_pct_after_buy_and_open_orders")
 
         exposure_text = (
             f"Adaptive pullback candidate: limit buy {order_usdt:.2f} USDT @ ${limit_price:,.0f}\n"
@@ -4224,7 +4281,7 @@ def format_guardrail_check(config, market, portfolio, base_decision,
         ),
         f"Open orders active: {'yes' if has_open_orders else 'no'}",
         f"Possible fill detected: {'yes - verify Tokocrypto first' if possible_fill else 'no'}",
-        f"BTC allocation status: {allocation_status} ({btc_pct:.1f}% vs target {target_min:.0f}-{target_max:.0f}%)",
+        f"Base allocation status: {allocation_status} ({base_pct:.1f}% vs target {target_min:.0f}-{target_max:.0f}%)",
         f"Buy gate: {buy_gate_status}",
         exposure_text,
         format_allowed_actions(candidate_actions),
@@ -4267,14 +4324,14 @@ def format_manual_execution_plan(config, market, decision):
 
     if decision.get("order_style") == "pullback_limit" and action_usdt > 0:
         limit_price = float(decision.get("recommended_limit_price", 0) or 0)
-        estimated_btc = float(decision.get("estimated_btc_if_filled", 0) or 0)
+        estimated_base = float(decision.get("estimated_base_if_filled", 0) or 0)
         expiry_hours = decision.get("expiry_guidance_hours", 24)
 
         return (
             f"Manual plan: place a LIMIT BUY order only.\n"
             f"Order size: {action_usdt:.2f} USDT.\n"
             f"Limit price: ${limit_price:,.0f}.\n"
-            f"Estimated BTC if filled: {estimated_btc:.8f} BTC.\n"
+            f"Estimated BTC if filled: {estimated_base:.8f} BTC.\n"
             f"This is a pullback entry, not an immediate buy.\n"
             f"Do not market buy this signal.\n"
             f"Do not exceed the recommended size.\n"
@@ -4285,7 +4342,7 @@ def format_manual_execution_plan(config, market, decision):
         )
 
     if "BUY" in signal and action_usdt > 0:
-        estimated_btc = action_usdt / market_price if market_price > 0 else 0
+        estimated_base = action_usdt / market_price if market_price > 0 else 0
         suggested_limit_price = market_price * (1 - limit_buy_offset_pct / 100) if market_price > 0 else 0
 
         if buy_order_type_preference == "market":
@@ -4310,7 +4367,7 @@ def format_manual_execution_plan(config, market, decision):
             f"{order_type_line}\n"
             f"Suggested limit price: ${suggested_limit_price:,.0f} "
             f"(~{limit_buy_offset_pct:.2f}% below report price ${market_price:,.0f}).\n"
-            f"Estimated BTC if filled near report price: {estimated_btc:.8f} BTC.\n"
+            f"Estimated BTC if filled near report price: {estimated_base:.8f} BTC.\n"
             f"{market_buy_note}\n"
             f"If the limit order is not filled within ~{limit_expiry_guidance_minutes} minutes, do not chase; wait for the next bot run.\n"
             "Do not exceed the recommended size.\n"
@@ -4430,29 +4487,34 @@ def build_message(config, market, portfolio, decision,
         f"Quota: {esc(requests_today)}/{esc(daily_limit)} requests today\n\n"
     )
 
+    asset = get_asset_config(config)
+    base = asset.get("base", "BTC")
+    quote = asset.get("quote", "USDT")
+    agent_name = asset.get("agent_name", f"{base} Discipline Agent")
+
     return (
-        f"<b>BTC Discipline Agent</b>\n\n"
+        f"<b>{esc(agent_name)}</b>\n\n"
 
         f"<b>Market</b>\n"
-        f"BTC/USDT: <b>${market['price']:,.0f}</b>\n"
+        f"{base}/{quote}: <b>{format_price(market['price'], asset['price_decimals'])}</b>\n"
         f"Source: {esc(market.get('source', 'unknown'))}\n"
         f"Regime: <b>{esc(market['regime'])}</b>\n"
         f"24h: {market['change_24h']:.2f}% | "
         f"7d: {market['change_7d']:.2f}% | "
         f"30d: {market['change_30d']:.2f}%\n"
-        f"7d range: ${market['low_7d']:,.0f} - ${market['high_7d']:,.0f}\n"
+        f"7d range: {format_price(market['low_7d'], asset['price_decimals'])} - {format_price(market['high_7d'], asset['price_decimals'])}\n"
         f"From 7d high: {market['from_7d_high']:.2f}%\n"
-        f"MA7: ${market['ma_7']:,.0f} | MA20: ${market['ma_20']:,.0f}\n\n"
+        f"MA7: {format_price(market['ma_7'], asset['price_decimals'])} | MA20: {format_price(market['ma_20'], asset['price_decimals'])}\n\n"
 
         f"<b>Portfolio</b>\n"
         f"Source: {esc(portfolio.get('source', 'unknown'))}\n"
         f"{portfolio_note}"
-        f"BTC: {portfolio['btc_pct']:.1f}% | USDT: {portfolio['usdt_pct']:.1f}%\n"
-        f"BTC total: {portfolio['btc']:.8f}\n"
-        f"USDT free: {portfolio['usdt_free']:.2f}\n"
-        f"USDT used/open orders: {portfolio['usdt_used']:.2f}\n"
-        f"USDT total: {portfolio['usdt']:.2f}\n"
-        f"Total value: <b>{portfolio['total_value']:.2f} USDT</b>\n\n"
+        f"{base}: {portfolio['base_pct']:.1f}% | {quote}: {portfolio['usdt_pct']:.1f}%\n"
+        f"{base} total: {portfolio[base.lower()]:.8f}\n"
+        f"{quote} free: {portfolio['usdt_free']:.2f}\n"
+        f"{quote} used/open orders: {portfolio['usdt_used']:.2f}\n"
+        f"{quote} total: {portfolio['usdt']:.2f}\n"
+        f"Total value: <b>{portfolio['total_value']:.2f} {quote}</b>\n\n"
 
         f"<b>Recovery</b>\n"
         f"{esc(recovery_text)}\n\n"
@@ -4493,11 +4555,14 @@ def build_message(config, market, portfolio, decision,
 # Journal logging
 # ============================================================
 
-def append_signal_log(market, portfolio, decision):
+def append_signal_log(config, market, portfolio, decision):
     os.makedirs("data", exist_ok=True)
 
     log_file = "data/signal_log.csv"
     timestamp = datetime.now(timezone.utc).isoformat()
+
+    asset = get_asset_config(config)
+    base = asset.get("base", "BTC")
 
     row = {
         "timestamp": timestamp,
@@ -4507,9 +4572,9 @@ def append_signal_log(market, portfolio, decision):
         "change_24h": market["change_24h"],
         "change_7d": market["change_7d"],
         "change_30d": market["change_30d"],
-        "btc_pct": portfolio["btc_pct"],
+        "base_pct": portfolio["base_pct"],
         "usdt_pct": portfolio["usdt_pct"],
-        "btc_total": portfolio["btc"],
+        "base_total": portfolio[base.lower()],
         "usdt_total": portfolio["usdt"],
         "usdt_free": portfolio["usdt_free"],
         "usdt_used": portfolio["usdt_used"],
@@ -4527,14 +4592,16 @@ def append_signal_log(market, portfolio, decision):
 # Main
 # ============================================================
 
-def main():
-    print("BTC Discipline Agent started")
+def process_asset(config):
+    asset = get_asset_config(config)
+    coingecko_id = asset.get("coingecko_id", "bitcoin")
 
-    config = load_config()
-    enforce_no_trading(config)
-
-    ticker = get_24h_ticker(config["symbol"])
-    daily = get_daily_klines(config["symbol"], days=30)
+    try:
+        ticker = get_24h_ticker(config["symbol"], config)
+    except Exception as e:
+        print(f"[ERROR] Failed to fetch ticker for {config.get('symbol')}: {e}")
+        return f"<b>{esc(config.get('asset', {}).get('name', 'Unknown'))}</b>\nError: Failed to fetch market data."
+    daily = get_daily_klines(config["symbol"], days=30, coingecko_id=coingecko_id)
 
     market = calculate_market_context(ticker, daily)
     portfolio = calculate_portfolio(config, market["price"])
@@ -4599,7 +4666,7 @@ def main():
         portfolio=portfolio,
     )
 
-    append_signal_log(market, portfolio, decision)
+    append_signal_log(config, market, portfolio, decision)
 
     message = build_message(
         config=config,
@@ -4615,7 +4682,57 @@ def main():
         gemini_review=gemini_review,
     )
 
-    send_telegram(message)
+    return message
+
+
+def main():
+    print("Brother Multi-Asset Agent started")
+    config_name = os.getenv("BTC_AGENT_CONFIG", "config_git.yaml")
+    try:
+        multi_config = load_config(config_name)
+    except Exception as e:
+        print(f"[FATAL] Could not load {config_name}: {e}")
+        return
+
+    # Extract global settings
+    global_config = copy.deepcopy(multi_config)
+    assets_list = global_config.pop("assets", [])
+
+    all_messages = []
+
+    if not assets_list:
+        print(f"[INFO] No 'assets' list found in {config_name}. Running in single-asset mode.")
+        try:
+            enforce_no_trading(multi_config)
+            asset_msg = process_asset(multi_config)
+            all_messages.append(asset_msg)
+        except Exception as e:
+            print(f"[ERROR] Failed processing single-asset: {e}")
+            all_messages.append(f"<b>Error processing single-asset</b>\n{esc(str(e))}")
+    else:
+        for asset_override in assets_list:
+            symbol = asset_override.get("symbol", "Unknown")
+            print(f"\n--- Processing {symbol} ---")
+            try:
+                # Merge global config with specific asset override
+                asset_config = copy.deepcopy(global_config)
+                deep_update(asset_config, asset_override)
+                
+                enforce_no_trading(asset_config)
+                
+                asset_msg = process_asset(asset_config)
+                all_messages.append(asset_msg)
+            except Exception as e:
+                print(f"[ERROR] Failed processing {symbol}: {e}")
+                all_messages.append(f"<b>Error processing {symbol}</b>\n{esc(str(e))}")
+
+    # Combine all messages with a clear separator
+    separator = "\n\n" + "═" * 30 + "\n\n"
+    final_message = separator.join(all_messages)
+
+    print("\n[INFO] Sending combined report to Telegram...")
+    send_telegram(final_message)
+    print("[INFO] Done!")
 
     print("BTC Discipline Agent finished")
 
