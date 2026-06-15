@@ -11,6 +11,7 @@ import re
 from dotenv import load_dotenv
 import copy
 import collections.abc
+import time
 
 load_dotenv()
 
@@ -94,6 +95,38 @@ def format_price(price, decimals=0):
     if decimals <= 0:
         return f"${price:,.0f}"
     return f"${price:,.{decimals}f}"
+
+
+# ============================================================
+# CoinGecko Cache
+# ============================================================
+
+COINGECKO_PRICE_CACHE = {}
+
+def prefetch_coingecko_prices(assets_list):
+    global COINGECKO_PRICE_CACHE
+    ids = []
+    for asset_override in assets_list:
+        asset_cfg = asset_override.get("asset", {})
+        coingecko_id = asset_cfg.get("coingecko_id")
+        if coingecko_id:
+            ids.append(coingecko_id)
+            
+    if not ids:
+        return
+        
+    ids_str = ",".join(ids)
+    url = f"https://api.coingecko.com/api/v3/simple/price?ids={ids_str}&vs_currencies=usd&include_24hr_change=true"
+    try:
+        print(f"[INFO] Prefetching CoinGecko prices for: {ids_str}...")
+        response = requests.get(url, timeout=25)
+        if response.status_code == 200:
+            COINGECKO_PRICE_CACHE = response.json()
+            print(f"[INFO] Prefetched CoinGecko prices successfully: {COINGECKO_PRICE_CACHE}")
+        else:
+            print(f"[WARN] Prefetch CoinGecko prices failed with status {response.status_code}: {response.text}")
+    except Exception as e:
+        print(f"[WARN] Prefetch CoinGecko prices failed: {e}")
 
 
 # ============================================================
@@ -262,6 +295,23 @@ def get_tokocrypto_price_via_ccxt(symbol):
 
 
 def get_coingecko_price(coingecko_id="bitcoin"):
+    # Check cache first
+    global COINGECKO_PRICE_CACHE
+    if coingecko_id in COINGECKO_PRICE_CACHE:
+        coin_data = COINGECKO_PRICE_CACHE[coingecko_id]
+        if "usd" in coin_data:
+            price = float(coin_data["usd"])
+            change_24h = float(coin_data.get("usd_24h_change", 0.0) or 0.0)
+            print(f"[INFO] Using cached CoinGecko price for {coingecko_id}: price={price}, 24h_change={change_24h}%")
+            return {
+                "price": price,
+                "change_pct_24h": change_24h,
+                "high_24h": price,
+                "low_24h": price,
+                "volume": 0,
+                "source": "CoinGecko fallback (cached)",
+            }
+
     url = (
         "https://api.coingecko.com/api/v3/simple/price"
         f"?ids={coingecko_id}"
@@ -269,6 +319,8 @@ def get_coingecko_price(coingecko_id="bitcoin"):
         "&include_24hr_change=true"
     )
 
+    # Sleep to avoid 429 if doing direct query
+    time.sleep(2)
     response = requests.get(url, timeout=25)
     data = response.json()
 
@@ -322,6 +374,8 @@ def get_daily_klines(symbol, days=30, **kwargs):
         "interval": "daily",
     }
 
+    # Sleep to avoid 429 rate limit
+    time.sleep(2)
     response = requests.get(url, params=params, timeout=25)
     data = response.json()
     prices = data.get("prices", [])
@@ -389,6 +443,8 @@ def get_recent_intrahour_price_window(config):
     }
 
     try:
+        # Sleep to avoid 429 rate limit
+        time.sleep(2)
         response = requests.get(url, params=params, timeout=25)
 
         if not response.ok:
@@ -4636,95 +4692,347 @@ def append_signal_log(config, market, portfolio, decision):
 
 def process_asset(config):
     asset = get_asset_config(config)
-    coingecko_id = asset.get("coingecko_id", "bitcoin")
+    base = asset.get("base", "Unknown")
+    name = asset.get("name", "Unknown")
 
     try:
+        coingecko_id = asset.get("coingecko_id", "bitcoin")
         ticker = get_24h_ticker(config["symbol"], config)
+        daily = get_daily_klines(config["symbol"], days=30, coingecko_id=coingecko_id)
+
+        market = calculate_market_context(ticker, daily)
+        portfolio = calculate_portfolio(config, market["price"])
+
+        intrahour_window = get_recent_intrahour_price_window(config)
+        intrahour_order_events = detect_intrahour_order_events(
+            config=config,
+            intrahour_window=intrahour_window,
+            current_price=market["price"],
+        )
+
+        base_decision = decide_signal(config, market, portfolio)
+        base_decision = adjust_decision_for_intrahour_order_events(
+            config=config,
+            decision=base_decision,
+            intrahour_order_events=intrahour_order_events,
+        )
+
+        open_orders = []
+        open_orders_error = ""
+
+        if config.get("data_sources", {}).get("use_tokocrypto_open_orders", False):
+            open_orders, open_orders_error = fetch_tokocrypto_open_orders()
+        else:
+            manual_orders_cfg = config.get("manual_open_orders", {})
+            if manual_orders_cfg.get("enabled", False):
+                open_orders = []
+                for order in manual_orders_cfg.get("orders", []):
+                    if order.get("status") == "open":
+                        open_orders.append({
+                            "side": order.get("side"),
+                            "type": order.get("type"),
+                            "price": order.get("price"),
+                            "amount": order.get("amount"),
+                            "status": order.get("status"),
+                        })
+
+        candidate_actions = build_gemini_candidate_actions(
+            config=config,
+            market=market,
+            portfolio=portfolio,
+            open_orders=open_orders,
+            intrahour_order_events=intrahour_order_events,
+        )
+
+        gemini_review = generate_gemini_explanation(
+            config=config,
+            market=market,
+            portfolio=portfolio,
+            decision=base_decision,
+            open_orders=open_orders,
+            intrahour_order_events=intrahour_order_events,
+            candidate_actions=candidate_actions,
+        )
+
+        decision = apply_gemini_decision_with_guards(
+            config=config,
+            base_decision=base_decision,
+            gemini_review=gemini_review,
+            candidate_actions=candidate_actions,
+            market=market,
+            portfolio=portfolio,
+        )
+
+        append_signal_log(config, market, portfolio, decision)
+
+        manual_execution_plan = format_manual_execution_plan(
+            config=config,
+            market=market,
+            decision=decision,
+        )
+
+        guardrail_text = format_guardrail_check(
+            config=config,
+            market=market,
+            portfolio=portfolio,
+            base_decision=base_decision,
+            candidate_actions=candidate_actions,
+            open_orders=open_orders or [],
+            intrahour_order_events=intrahour_order_events or {},
+        )
+
+        gemini_decision_text = format_gemini_decision_text(
+            config=config,
+            gemini_review=gemini_review,
+            candidate_actions=candidate_actions,
+            final_decision=decision,
+        )
+
+        scenario_text = build_scenario_text(portfolio, config, market)
+        recovery = calculate_recovery_status(config, portfolio)
+
+        llm_routing = config.get("_last_llm_routing")
+        if not llm_routing:
+            try:
+                llm_routing = choose_gemini_model(config, market, portfolio, decision)
+            except Exception as error:
+                llm_routing = {
+                    "mode": "unavailable",
+                    "model": "none",
+                    "use_grounding": False,
+                    "routing_reason": f"routing unavailable: {error}",
+                    "quota_reason": "",
+                    "ai_source": "unavailable",
+                    "daily_limit": 0,
+                }
+
+        return {
+            "base": base,
+            "name": name,
+            "config": config,
+            "market": market,
+            "portfolio": portfolio,
+            "decision": decision,
+            "open_orders": open_orders,
+            "open_orders_error": open_orders_error,
+            "intrahour_order_events": intrahour_order_events,
+            "base_decision": base_decision,
+            "candidate_actions": candidate_actions,
+            "gemini_review": gemini_review,
+            "manual_execution_plan": manual_execution_plan,
+            "guardrail_text": guardrail_text,
+            "gemini_decision_text": gemini_decision_text,
+            "scenario_text": scenario_text,
+            "recovery": recovery,
+            "llm_routing": llm_routing,
+        }
     except Exception as e:
-        print(f"[ERROR] Failed to fetch ticker for {config.get('symbol')}: {e}")
-        return f"<b>{esc(config.get('asset', {}).get('name', 'Unknown'))}</b>\nError: Failed to fetch market data."
-    daily = get_daily_klines(config["symbol"], days=30, coingecko_id=coingecko_id)
+        print(f"[ERROR] Failed processing asset {base}: {e}")
+        import traceback; traceback.print_exc()
+        return {
+            "base": base,
+            "name": name,
+            "error": str(e)
+        }
 
-    market = calculate_market_context(ticker, daily)
-    portfolio = calculate_portfolio(config, market["price"])
 
-    intrahour_window = get_recent_intrahour_price_window(config)
-    intrahour_order_events = detect_intrahour_order_events(
-        config=config,
-        intrahour_window=intrahour_window,
-        current_price=market["price"],
+def build_single_asset_message(data):
+    if "error" in data:
+        return f"<b>{esc(data.get('name', 'Unknown'))}</b>\nError: {esc(data['error'])}"
+    return build_message(
+        config=data["config"],
+        market=data["market"],
+        portfolio=data["portfolio"],
+        decision=data["decision"],
+        open_orders=data["open_orders"],
+        ai_explanation=data["gemini_review"].get("ai_explanation", ""),
+        open_orders_error=data["open_orders_error"],
+        intrahour_order_events=data["intrahour_order_events"],
+        base_decision=data["base_decision"],
+        candidate_actions=data["candidate_actions"],
+        gemini_review=data["gemini_review"],
     )
 
-    base_decision = decide_signal(config, market, portfolio)
-    base_decision = adjust_decision_for_intrahour_order_events(
-        config=config,
-        decision=base_decision,
-        intrahour_order_events=intrahour_order_events,
-    )
 
-    open_orders = []
-    open_orders_error = ""
+def build_combined_message(assets_data_list, global_config):
+    lines = ["<b>🤖 Brother Multi-Asset Discipline Agent</b>\nStatus: RUNNING\n"]
 
-    if config.get("data_sources", {}).get("use_tokocrypto_open_orders", False):
-        open_orders, open_orders_error = fetch_tokocrypto_open_orders()
+    # 1. MARKET OVERVIEW
+    lines.append("<b>" + "═" * 10 + " MARKET OVERVIEW " + "═" * 10 + "</b>")
+    for data in assets_data_list:
+        base = data["base"]
+        if "error" in data:
+            lines.append(f"• <b>{base}</b>: Error - {esc(data['error'])}")
+            continue
+        
+        market = data["market"]
+        config = data["config"]
+        asset = get_asset_config(config)
+        decimals = asset.get("price_decimals", 0)
+        quote = asset.get("quote", "USDT")
+        
+        price_str = format_price(market["price"], decimals)
+        change_str = f"{market['change_24h']:.2f}%"
+        regime = esc(market["regime"])
+        source = esc(market.get("source", "unknown"))
+        
+        ma7 = format_price(market["ma_7"], decimals)
+        ma20 = format_price(market["ma_20"], decimals)
+        low7d = format_price(market["low_7d"], decimals)
+        high7d = format_price(market["high_7d"], decimals)
+        from_7d_high = market["from_7d_high"]
+        
+        lines.append(
+            f"• <b>{base}/{quote}</b>: <b>{price_str}</b> | 24h: {change_str} | Regime: <b>{regime}</b> ({source})\n"
+            f"  MA7: {ma7} | MA20: {ma20} | 7d range: {low7d} - {high7d} | From 7d: {from_7d_high:.2f}%"
+        )
+    lines.append("")
+
+    # 2. PORTFOLIO STATUS
+    lines.append("<b>" + "═" * 10 + " PORTFOLIO STATUS " + "═" * 10 + "</b>")
+    first_success = next((d for d in assets_data_list if "error" not in d), None)
+    if first_success:
+        usdt_free = first_success["portfolio"]["usdt_free"]
+        usdt_used = first_success["portfolio"]["usdt_used"]
+        usdt_total = first_success["portfolio"]["usdt"]
+        portfolio_source = esc(first_success["portfolio"].get("source", "unknown"))
     else:
-        manual_orders_cfg = config.get("manual_open_orders", {})
-        if manual_orders_cfg.get("enabled", False):
-            open_orders = []
-            for order in manual_orders_cfg.get("orders", []):
-                if order.get("status") == "open":
-                    open_orders.append({
-                        "side": order.get("side"),
-                        "type": order.get("type"),
-                        "price": order.get("price"),
-                        "amount": order.get("amount"),
-                        "status": order.get("status"),
-                    })
-
-    candidate_actions = build_gemini_candidate_actions(
-        config=config,
-        market=market,
-        portfolio=portfolio,
-        open_orders=open_orders,
-        intrahour_order_events=intrahour_order_events,
+        usdt_free = usdt_used = usdt_total = 0.0
+        portfolio_source = "unknown"
+        
+    lines.append(
+        f"Source: {portfolio_source}\n"
+        f"USDT: <b>{usdt_free:.2f}</b> Free | <b>{usdt_used:.2f}</b> Used | <b>{usdt_total:.2f}</b> Total\n\n"
+        f"<b>Asset Holdings:</b>"
     )
+    
+    total_token_value = 0.0
+    for data in assets_data_list:
+        base = data["base"]
+        if "error" in data:
+            lines.append(f"• <b>{base}</b>: Error calculating holdings.")
+            continue
+            
+        portfolio = data["portfolio"]
+        qty = portfolio[base.lower()]
+        price = data["market"]["price"]
+        val = qty * price
+        total_token_value += val
+        
+        pct = portfolio["base_pct"]
+        target_min = float(data["config"]["portfolio"]["target_base_min_pct"])
+        target_max = float(data["config"]["portfolio"]["target_base_max_pct"])
+        
+        if pct < target_min:
+            status = "below target"
+        elif pct > target_max:
+            status = "above target"
+        else:
+            status = "within target"
+            
+        lines.append(
+            f"• <b>{base}</b>: {qty:.8f} (<b>{val:.2f} USDT</b> | {pct:.1f}%)\n"
+            f"  Target: {target_min:.0f}-{target_max:.0f}% | Status: <i>{status}</i>"
+        )
+        
+    total_account_value = usdt_total + total_token_value
+    lines.append(f"\n<b>Total Account Value: {total_account_value:.2f} USDT</b>\n")
 
-    gemini_review = generate_gemini_explanation(
-        config=config,
-        market=market,
-        portfolio=portfolio,
-        decision=base_decision,
-        open_orders=open_orders,
-        intrahour_order_events=intrahour_order_events,
-        candidate_actions=candidate_actions,
-    )
+    # 3. RECOVERY TRACKER
+    lines.append("<b>" + "═" * 10 + " RECOVERY TRACKER " + "═" * 10 + "</b>")
+    initial_capital = 0.0
+    if first_success:
+        initial_capital = float(first_success["config"].get("recovery", {}).get("initial_capital_usdt", 0))
+        
+    if initial_capital > 0:
+        gap = initial_capital - total_account_value
+        gap_pct = (gap / total_account_value) * 100 if total_account_value > 0 else 0
+        recovered_pct = (total_account_value / initial_capital) * 100
+        
+        if gap <= 0:
+            lines.append(
+                f"Recovery status: <b>RECOVERED</b>\n"
+                f"Initial capital: {initial_capital:.2f} USDT\n"
+                f"Current value: {total_account_value:.2f} USDT\n"
+                f"Surplus: <b>{abs(gap):.2f} USDT</b>"
+            )
+        else:
+            lines.append(
+                f"Recovery status: <b>NOT RECOVERED</b>\n"
+                f"Initial capital: {initial_capital:.2f} USDT\n"
+                f"Current value: {total_account_value:.2f} USDT\n"
+                f"Gap to break-even: <b>{gap:.2f} USDT</b> ({gap_pct:.1f}% from current portfolio)\n"
+                f"Recovered: <b>{recovered_pct:.1f}%</b>"
+            )
+    else:
+        lines.append("Recovery tracker: disabled.")
+    lines.append("")
 
-    decision = apply_gemini_decision_with_guards(
-        config=config,
-        base_decision=base_decision,
-        gemini_review=gemini_review,
-        candidate_actions=candidate_actions,
-        market=market,
-        portfolio=portfolio,
-    )
+    # 4. GUARDRAILS & BUY GATES
+    lines.append("<b>" + "═" * 10 + " GUARDRAILS & BUY GATES " + "═" * 10 + "</b>")
+    for data in assets_data_list:
+        base = data["base"]
+        if "error" in data:
+            lines.append(f"• <b>{base}</b>: Error fetching guardrails.")
+            continue
+            
+        guardrail = data["guardrail_text"].replace("\n", "\n  ")
+        lines.append(f"• <b>{base} Guardrails:</b>\n  {esc(guardrail)}")
+    lines.append("")
 
-    append_signal_log(config, market, portfolio, decision)
+    # 5. GEMINI AI REVIEW
+    lines.append("<b>" + "═" * 10 + " GEMINI AI REVIEW " + "═" * 10 + "</b>")
+    for data in assets_data_list:
+        base = data["base"]
+        if "error" in data:
+            lines.append(f"• <b>{base}</b>: Error during Gemini analysis.")
+            continue
+            
+        decision = data["decision"]
+        confidence = decision.get("confidence", "?")
+        ai_exp = data["gemini_review"].get("ai_explanation", "No analysis returned.")
+        ai_exp_indented = ai_exp.replace("\n", "\n  ")
+        lines.append(
+            f"• <b>{base} Analysis:</b> (Confidence: {confidence}/100)\n"
+            f"  {esc(ai_exp_indented)}"
+        )
+    lines.append("")
 
-    message = build_message(
-        config=config,
-        market=market,
-        portfolio=portfolio,
-        decision=decision,
-        open_orders=open_orders,
-        ai_explanation=gemini_review.get("ai_explanation", ""),
-        open_orders_error=open_orders_error,
-        intrahour_order_events=intrahour_order_events,
-        base_decision=base_decision,
-        candidate_actions=candidate_actions,
-        gemini_review=gemini_review,
-    )
+    # 6. FINAL DECISIONS & ACTIONS
+    lines.append("<b>" + "═" * 10 + " FINAL DECISIONS " + "═" * 10 + "</b>")
+    for data in assets_data_list:
+        base = data["base"]
+        if "error" in data:
+            lines.append(f"• <b>{base}</b>: Error making final decision.")
+            continue
+            
+        decision = data["decision"]
+        manual_plan = data["manual_execution_plan"].replace("\n", "\n  ")
+        
+        lines.append(
+            f"• <b>{base} Decision:</b>\n"
+            f"  Signal: <b>{esc(decision['signal'])}</b>\n"
+            f"  Recommended action: <b>{format_decision_action(decision)}</b>\n"
+            f"  Reason: {esc(decision['reason'])}\n"
+            f"  Manual Plan:\n  {esc(manual_plan)}"
+        )
+    lines.append("")
 
-    return message
+    # 7. SYSTEM ROUTING
+    lines.append("<b>" + "═" * 10 + " SYSTEM ROUTING " + "═" * 10 + "</b>")
+    for data in assets_data_list:
+        base = data["base"]
+        if "error" in data:
+            continue
+            
+        routing = data.get("llm_routing") or {}
+        lines.append(
+            f"• <b>{base}</b>: Model: <code>{esc(routing.get('model', 'none'))}</code> | "
+            f"Mode: <code>{esc(routing.get('mode', 'unknown'))}</code> | "
+            f"Reason: <i>{esc(routing.get('routing_reason', ''))}</i>"
+        )
+        
+    return "\n".join(lines)
 
 
 def main():
@@ -4740,18 +5048,19 @@ def main():
     global_config = copy.deepcopy(multi_config)
     assets_list = global_config.pop("assets", [])
 
-    all_messages = []
+    prefetch_coingecko_prices(assets_list)
 
     if not assets_list:
         print(f"[INFO] No 'assets' list found in {config_name}. Running in single-asset mode.")
         try:
             enforce_no_trading(multi_config)
-            asset_msg = process_asset(multi_config)
-            all_messages.append(asset_msg)
+            asset_data = process_asset(multi_config)
+            final_message = build_single_asset_message(asset_data)
         except Exception as e:
             print(f"[ERROR] Failed processing single-asset: {e}")
-            all_messages.append(f"<b>Error processing single-asset</b>\n{esc(str(e))}")
+            final_message = f"<b>Error processing single-asset</b>\n{esc(str(e))}"
     else:
+        assets_data_list = []
         for asset_override in assets_list:
             symbol = asset_override.get("symbol", "Unknown")
             print(f"\n--- Processing {symbol} ---")
@@ -4762,18 +5071,29 @@ def main():
                 
                 enforce_no_trading(asset_config)
                 
-                asset_msg = process_asset(asset_config)
-                all_messages.append(asset_msg)
+                asset_data = process_asset(asset_config)
+                assets_data_list.append(asset_data)
             except Exception as e:
                 import traceback; traceback.print_exc()
                 print(f"[ERROR] Failed processing {symbol}: {e}")
-                all_messages.append(f"<b>Error processing {symbol}</b>\n{esc(str(e))}")
+                assets_data_list.append({
+                    "base": symbol.split("/")[0],
+                    "name": symbol.split("/")[0],
+                    "error": str(e)
+                })
 
-    # Combine all messages with a clear separator
-    separator = "\n\n" + "═" * 30 + "\n\n"
-    final_message = separator.join(all_messages)
+        final_message = build_combined_message(assets_data_list, global_config)
 
-    print("\n[INFO] Sending combined report to Telegram...")
+    print("\n[INFO] Sending report to Telegram...")
+    print("----- FINAL REPORT PREVIEW -----")
+    try:
+        print(final_message)
+    except UnicodeEncodeError:
+        try:
+            print(final_message.encode('ascii', errors='replace').decode('ascii'))
+        except Exception:
+            print("[INFO] (Could not print full emoji preview in local console due to terminal encoding. Telegram will display it perfectly.)")
+    print("--------------------------------")
     send_telegram(final_message)
     print("[INFO] Done!")
 
