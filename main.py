@@ -195,7 +195,7 @@ def send_telegram(message):
 
     for index, chunk in enumerate(chunks, start=1):
         if total_chunks > 1:
-            prefix = f"<b>Brother Portfolio Agent</b> — Part {index}/{total_chunks}\n\n"
+            prefix = f"<b>Multi-Asset Trading Agent</b> — Part {index}/{total_chunks}\n\n"
 
             if index == 1:
                 chunk_to_send = chunk
@@ -1888,6 +1888,8 @@ def build_gemini_candidate_actions(config, market, portfolio, open_orders, intra
     They do not affect Telegram message or trading decision.
     """
     decision_cfg = config.get("gemini_decision", {})
+    asset = get_asset_config(config)
+    base = asset.get("base", "BTC")
 
     actions = [
         {
@@ -4855,7 +4857,7 @@ def build_single_asset_message(data):
 
 
 def build_combined_message(assets_data_list, global_config):
-    lines = ["<b>🤖 Brother Multi-Asset Discipline Agent</b>\nStatus: RUNNING\n"]
+    lines = ["<b>Multi-Asset Trading Agent</b>\nStatus: RUNNING\n"]
 
     # 1. MARKET OVERVIEW
     lines.append("<b>" + "═" * 10 + " MARKET OVERVIEW " + "═" * 10 + "</b>")
@@ -5036,7 +5038,7 @@ def build_combined_message(assets_data_list, global_config):
 
 
 def main():
-    print("Brother Multi-Asset Agent started")
+    print("Multi-Asset Agent started")
     config_name = os.getenv("BTC_AGENT_CONFIG", "config_git.yaml")
     try:
         multi_config = load_config(config_name)
@@ -5097,8 +5099,7 @@ def main():
     send_telegram(final_message)
     print("[INFO] Done!")
 
-    print("BTC Discipline Agent finished")
-
+    print("Multi-Asset Agent finished")
 
 if __name__ == "__main__":
     main()
