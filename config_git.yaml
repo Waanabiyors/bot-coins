@@ -31,7 +31,7 @@ assets:
       agent_name: Brother ASR Agent
       price_decimals: 3
     portfolio:
-      asr: 2.9589708
+      asr: 9.7277481
       target_base_min_pct: 10
       target_base_max_pct: 30
     base_cost_basis:
@@ -40,10 +40,10 @@ assets:
       min_coverage_pct: 90
       manual_lots:
         - side: buy
-          amount_base: 2.9589708
-          price_usdt: 3.12
+          amount_base: 9.7277481
+          price_usdt: 1.158
           fee_base: 0
-          note: "Initial allocation"
+          note: "Remaining ASR after trades up to 16/06 (FIFO adjusted)"
     manual_open_orders:
       enabled: true
       orders:
@@ -101,7 +101,7 @@ assets:
 
 # GLOBAL SETTINGS (Applied to all assets above unless overridden)
 portfolio:
-  usdt: 21.79465703
+  usdt: 14.06598187
   max_single_buy_usdt: 10
   emergency_usdt_reserve: 5
 
@@ -272,7 +272,7 @@ llm:
       daily_limit: 20
     deep_secondary:
       model: "gemini-2.5-flash"
-      max_output_tokens: 13000
+      max_output_tokens: 15000
       daily_limit: 20
     grounding:
       model: "gemini-2.5-flash"
