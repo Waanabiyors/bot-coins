@@ -4,21 +4,21 @@
   "last_grounding_bucket_utc": "",
   "models": {
     "gemini-3.5-flash": {
-      "requests_today": 28,
+      "requests_today": 30,
       "success_today": 24,
-      "errors_today": 4,
-      "last_used_utc": "2026-06-16T15:20:03.832323+00:00",
+      "errors_today": 6,
+      "last_used_utc": "2026-06-16T15:22:47.268248+00:00",
       "last_status": "http_error",
       "last_mode": "deep_primary",
       "last_response_status": 429,
-      "last_error": "{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-3.5-flash\\nPlease retry in 56.182128507s.\",\n    \"status\": \"RESOURCE_EXHAUSTED\",\n    \"",
-      "cooldown_until_utc": "2026-06-16T15:35:03.832338+00:00"
+      "last_error": "{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-3.5-flash\\nPlease retry in 12.749969651s.\",\n    \"status\": \"RESOURCE_EXHAUSTED\",\n    \"",
+      "cooldown_until_utc": "2026-06-16T15:37:47.268261+00:00"
     },
     "gemini-2.5-flash": {
-      "requests_today": 4,
-      "success_today": 2,
+      "requests_today": 6,
+      "success_today": 4,
       "errors_today": 2,
-      "last_used_utc": "2026-06-16T15:20:13.188394+00:00",
+      "last_used_utc": "2026-06-16T15:22:55.798881+00:00",
       "last_status": "ok",
       "last_mode": "fallback",
       "last_response_status": 200,
