@@ -5076,14 +5076,13 @@ def build_combined_message(assets_data_list, global_config):
         if "error" in data:
             lines.append(f"• <b>{base}</b>: Error during Gemini analysis.")
             continue
-            
         decision = data["decision"]
         confidence = decision.get("confidence", "?")
         ai_exp = data["gemini_review"].get("ai_explanation", "No analysis returned.")
         ai_exp_indented = ai_exp.replace("\n", "\n  ")
         lines.append(
             f"• <b>{base} Analysis:</b> (Confidence: {confidence}/100)\n"
-            f"  {esc(ai_exp_indented)}"
+            f"  {ai_exp_indented}"
         )
     lines.append("")
 
