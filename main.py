@@ -260,10 +260,11 @@ def build_tokocrypto_exchange(private=False):
 
     exchange = ccxt.tokocrypto(params)
     
-    # Override Binance endpoint to bypass ISP block in Indonesia
-    if hasattr(exchange, 'urls') and 'api' in exchange.urls and 'rest' in exchange.urls['api'] and 'binance' in exchange.urls['api']['rest']:
-        exchange.urls['api']['rest']['binance'] = 'https://data-api.binance.vision/api/v3'
-        
+    # Override endpoints to bypass ISP block in Indonesia
+    if hasattr(exchange, 'urls') and 'api' in exchange.urls and 'rest' in exchange.urls['api']:
+        if 'binance' in exchange.urls['api']['rest']:
+            exchange.urls['api']['rest']['binance'] = 'https://data-api.binance.vision/api/v3'
+            
     return exchange
 
 
