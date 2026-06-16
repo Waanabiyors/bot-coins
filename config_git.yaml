@@ -46,17 +46,7 @@ assets:
           note: "Remaining ASR after trades up to 16/06 (FIFO adjusted)"
     manual_open_orders:
       enabled: true
-      orders:
-        - side: buy
-          type: limit
-          price: 1.149
-          amount: 10.4
-          status: open
-        - side: buy
-          type: limit
-          price: 0.92
-          amount: 6
-          status: open
+      orders: []
 
   - symbol: SANTOS/USDT
     asset:
