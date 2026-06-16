@@ -268,23 +268,23 @@ llm:
   models:
     deep_primary:
       model: "gemini-3.5-flash"
-      max_output_tokens: 2800
+      max_output_tokens: 18000
       daily_limit: 20
     deep_secondary:
       model: "gemini-2.5-flash"
-      max_output_tokens: 3000
+      max_output_tokens: 13000
       daily_limit: 20
     grounding:
       model: "gemini-2.5-flash"
-      max_output_tokens: 5000
+      max_output_tokens: 15000
       daily_limit: 20
     fallback:
       model: "gemini-2.5-flash-lite"
-      max_output_tokens: 1500
+      max_output_tokens: 15000
       daily_limit: 20
   fallback_models:
     - model: "gemini-2.5-flash"
-      max_output_tokens: 2200
+      max_output_tokens: 15000
       daily_limit: 20
   grounding:
     enabled: true
