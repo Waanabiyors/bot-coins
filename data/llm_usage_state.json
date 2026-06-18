@@ -4,26 +4,26 @@
   "last_grounding_bucket_utc": "2026-06-17T16:00Z",
   "models": {
     "gemini-3.5-flash": {
-      "requests_today": 40,
+      "requests_today": 44,
       "success_today": 3,
-      "errors_today": 37,
-      "last_used_utc": "2026-06-18T03:01:09.844700+00:00",
+      "errors_today": 41,
+      "last_used_utc": "2026-06-18T05:01:27.961604+00:00",
       "last_status": "http_error",
       "last_mode": "deep_primary",
       "last_response_status": 503,
       "last_error": "{\n  \"error\": {\n    \"code\": 503,\n    \"message\": \"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\n    \"status\": \"UNAVAILABLE\"\n  }\n}\n",
-      "cooldown_until_utc": "2026-06-18T03:16:09.844711+00:00"
+      "cooldown_until_utc": "2026-06-18T05:16:27.961618+00:00"
     },
     "gemini-2.5-flash": {
-      "requests_today": 39,
-      "success_today": 19,
-      "errors_today": 20,
-      "last_used_utc": "2026-06-18T03:01:09.967454+00:00",
+      "requests_today": 43,
+      "success_today": 20,
+      "errors_today": 23,
+      "last_used_utc": "2026-06-18T05:01:29.409788+00:00",
       "last_status": "http_error",
       "last_mode": "fallback",
-      "last_response_status": 429,
-      "last_error": "{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\\nPlease retry in 50.0488517s.\",\n    \"status\": \"RESOURCE_EXHAUSTED\",\n    \"de",
-      "cooldown_until_utc": "2026-06-18T03:16:09.967467+00:00"
+      "last_response_status": 503,
+      "last_error": "{\n  \"error\": {\n    \"code\": 503,\n    \"message\": \"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\n    \"status\": \"UNAVAILABLE\"\n  }\n}\n",
+      "cooldown_until_utc": "2026-06-18T05:16:29.409800+00:00"
     },
     "gemini-2.5-flash-lite": {
       "requests_today": 2,
