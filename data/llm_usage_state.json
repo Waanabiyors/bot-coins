@@ -1,35 +1,35 @@
 {
   "quota_date_pacific": "2026-06-19",
-  "grounded_runs_today": 2,
+  "grounded_runs_today": 6,
   "last_grounding_bucket_utc": "2026-06-19T08:00Z",
   "models": {
     "gemini-3.5-flash": {
-      "requests_today": 6,
-      "success_today": 0,
+      "requests_today": 8,
+      "success_today": 2,
       "errors_today": 6,
-      "last_used_utc": "2026-06-19T09:02:24.179970+00:00",
-      "last_status": "http_error",
+      "last_used_utc": "2026-06-19T11:02:17.542875+00:00",
+      "last_status": "ok",
       "last_mode": "deep_primary",
-      "last_response_status": 503,
+      "last_response_status": 200,
       "last_error": "{\n  \"error\": {\n    \"code\": 503,\n    \"message\": \"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\n    \"status\": \"UNAVAILABLE\"\n  }\n}\n",
-      "cooldown_until_utc": "2026-06-19T09:17:24.179982+00:00"
+      "cooldown_until_utc": ""
     },
     "gemini-2.5-flash": {
-      "requests_today": 8,
-      "success_today": 1,
-      "errors_today": 7,
-      "last_used_utc": "2026-06-19T09:02:27.274326+00:00",
-      "last_status": "http_error",
-      "last_mode": "fallback",
-      "last_response_status": 503,
+      "requests_today": 13,
+      "success_today": 2,
+      "errors_today": 11,
+      "last_used_utc": "2026-06-19T11:01:50.648856+00:00",
+      "last_status": "ok",
+      "last_mode": "grounding",
+      "last_response_status": 200,
       "last_error": "{\n  \"error\": {\n    \"code\": 503,\n    \"message\": \"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\n    \"status\": \"UNAVAILABLE\"\n  }\n}\n",
-      "cooldown_until_utc": "2026-06-19T09:17:27.274337+00:00"
+      "cooldown_until_utc": ""
     },
     "gemini-2.5-flash-lite": {
-      "requests_today": 1,
-      "success_today": 1,
+      "requests_today": 3,
+      "success_today": 3,
       "errors_today": 0,
-      "last_used_utc": "2026-06-19T09:01:21.387323+00:00",
+      "last_used_utc": "2026-06-19T11:01:35.973214+00:00",
       "last_status": "ok",
       "last_mode": "grounding_researcher",
       "last_response_status": 200,
