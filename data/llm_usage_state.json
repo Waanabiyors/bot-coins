@@ -4,26 +4,26 @@
   "last_grounding_bucket_utc": "2026-07-03T16:00Z",
   "models": {
     "gemini-3.5-flash": {
-      "requests_today": 29,
-      "success_today": 21,
-      "errors_today": 8,
-      "last_used_utc": "2026-07-03T21:01:14.394925+00:00",
+      "requests_today": 33,
+      "success_today": 23,
+      "errors_today": 10,
+      "last_used_utc": "2026-07-03T23:01:22.894946+00:00",
       "last_status": "http_error",
       "last_mode": "deep_primary",
       "last_response_status": 429,
-      "last_error": "{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-3.5-flash\\nPlease retry in 45.612376272s.\",\n    \"status\": \"RESOURCE_EXHAUSTED\",\n    \"",
-      "cooldown_until_utc": "2026-07-03T21:16:14.394936+00:00"
+      "last_error": "{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-3.5-flash\\nPlease retry in 37.119903811s.\",\n    \"status\": \"RESOURCE_EXHAUSTED\",\n    \"",
+      "cooldown_until_utc": "2026-07-03T23:16:22.894957+00:00"
     },
     "gemini-2.5-flash": {
-      "requests_today": 13,
+      "requests_today": 15,
       "success_today": 8,
-      "errors_today": 5,
-      "last_used_utc": "2026-07-03T21:01:15.937912+00:00",
+      "errors_today": 7,
+      "last_used_utc": "2026-07-03T23:01:23.616607+00:00",
       "last_status": "http_error",
       "last_mode": "fallback",
       "last_response_status": 503,
       "last_error": "{\n  \"error\": {\n    \"code\": 503,\n    \"message\": \"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\n    \"status\": \"UNAVAILABLE\"\n  }\n}\n",
-      "cooldown_until_utc": "2026-07-03T21:16:15.937924+00:00"
+      "cooldown_until_utc": "2026-07-03T23:16:23.616618+00:00"
     }
   }
 }
