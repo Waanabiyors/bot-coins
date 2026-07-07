@@ -4,10 +4,10 @@
   "last_grounding_bucket_utc": "",
   "models": {
     "gemini-3.5-flash": {
-      "requests_today": 12,
-      "success_today": 12,
+      "requests_today": 16,
+      "success_today": 16,
       "errors_today": 0,
-      "last_used_utc": "2026-07-07T11:02:01.887063+00:00",
+      "last_used_utc": "2026-07-07T13:01:32.588444+00:00",
       "last_status": "ok",
       "last_mode": "deep_primary",
       "last_response_status": 200,
