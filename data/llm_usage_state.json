@@ -1,29 +1,40 @@
 {
   "quota_date_pacific": "2026-07-13",
-  "grounded_runs_today": 3,
+  "grounded_runs_today": 5,
   "last_grounding_bucket_utc": "2026-07-13T12:00Z",
   "models": {
     "gemini-3.5-flash": {
-      "requests_today": 13,
+      "requests_today": 16,
       "success_today": 9,
-      "errors_today": 4,
-      "last_used_utc": "2026-07-13T13:02:04.966353+00:00",
+      "errors_today": 7,
+      "last_used_utc": "2026-07-13T15:01:49.598427+00:00",
       "last_status": "http_error",
       "last_mode": "deep_primary",
       "last_response_status": 503,
       "last_error": "{\n  \"error\": {\n    \"code\": 503,\n    \"message\": \"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\n    \"status\": \"UNAVAILABLE\"\n  }\n}\n",
-      "cooldown_until_utc": "2026-07-13T13:17:04.966362+00:00"
+      "cooldown_until_utc": "2026-07-13T15:16:49.598438+00:00"
     },
     "gemini-2.5-flash": {
-      "requests_today": 12,
-      "success_today": 6,
-      "errors_today": 6,
-      "last_used_utc": "2026-07-13T13:02:06.005686+00:00",
-      "last_status": "http_error",
+      "requests_today": 18,
+      "success_today": 8,
+      "errors_today": 10,
+      "last_used_utc": "2026-07-13T15:02:05.227414+00:00",
+      "last_status": "ok",
       "last_mode": "fallback",
+      "last_response_status": 200,
+      "last_error": "{\n  \"error\": {\n    \"code\": 503,\n    \"message\": \"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\n    \"status\": \"UNAVAILABLE\"\n  }\n}\n",
+      "cooldown_until_utc": ""
+    },
+    "gemini-2.5-flash-lite": {
+      "requests_today": 1,
+      "success_today": 0,
+      "errors_today": 1,
+      "last_used_utc": "2026-07-13T15:01:14.271315+00:00",
+      "last_status": "http_error",
+      "last_mode": "grounding_researcher",
       "last_response_status": 503,
       "last_error": "{\n  \"error\": {\n    \"code\": 503,\n    \"message\": \"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\n    \"status\": \"UNAVAILABLE\"\n  }\n}\n",
-      "cooldown_until_utc": "2026-07-13T13:17:06.005698+00:00"
+      "cooldown_until_utc": "2026-07-13T15:16:14.271327+00:00"
     }
   }
 }
