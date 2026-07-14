@@ -4,26 +4,26 @@
   "last_grounding_bucket_utc": "2026-07-14T20:00Z",
   "models": {
     "gemini-3.5-flash": {
-      "requests_today": 27,
-      "success_today": 12,
-      "errors_today": 15,
-      "last_used_utc": "2026-07-14T21:02:08.440799+00:00",
+      "requests_today": 31,
+      "success_today": 13,
+      "errors_today": 18,
+      "last_used_utc": "2026-07-14T23:01:52.712096+00:00",
       "last_status": "http_error",
       "last_mode": "deep_primary",
       "last_response_status": 429,
-      "last_error": "{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-3.5-flash\\nPlease retry in 51.567357411s.\",\n    \"status\": \"RESOURCE_EXHAUSTED\",\n    \"",
-      "cooldown_until_utc": "2026-07-14T21:17:08.440812+00:00"
+      "last_error": "{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-3.5-flash\\nPlease retry in 7.304635061s.\",\n    \"status\": \"RESOURCE_EXHAUSTED\",\n    \"d",
+      "cooldown_until_utc": "2026-07-14T23:16:52.712105+00:00"
     },
     "gemini-2.5-flash": {
-      "requests_today": 23,
-      "success_today": 17,
-      "errors_today": 6,
-      "last_used_utc": "2026-07-14T21:02:08.573729+00:00",
+      "requests_today": 26,
+      "success_today": 18,
+      "errors_today": 8,
+      "last_used_utc": "2026-07-14T23:01:52.856058+00:00",
       "last_status": "http_error",
       "last_mode": "fallback",
       "last_response_status": 429,
-      "last_error": "{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\\nPlease retry in 51.436939619s.\",\n    \"status\": \"RESOURCE_EXHAUSTED\",\n    \"",
-      "cooldown_until_utc": "2026-07-14T21:17:08.573742+00:00"
+      "last_error": "{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\\nPlease retry in 7.162166s.\",\n    \"status\": \"RESOURCE_EXHAUSTED\",\n    \"deta",
+      "cooldown_until_utc": "2026-07-14T23:16:52.856067+00:00"
     },
     "gemini-2.5-flash-lite": {
       "requests_today": 2,
