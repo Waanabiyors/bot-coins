@@ -4,21 +4,21 @@
   "last_grounding_bucket_utc": "2026-07-17T08:00Z",
   "models": {
     "gemini-3.5-flash": {
-      "requests_today": 35,
-      "success_today": 16,
-      "errors_today": 19,
-      "last_used_utc": "2026-07-17T23:02:24.404226+00:00",
+      "requests_today": 39,
+      "success_today": 18,
+      "errors_today": 21,
+      "last_used_utc": "2026-07-18T01:01:17.415672+00:00",
       "last_status": "http_error",
       "last_mode": "deep_primary",
       "last_response_status": 429,
-      "last_error": "{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-3.5-flash\\nPlease retry in 35.610964473s.\",\n    \"status\": \"RESOURCE_EXHAUSTED\",\n    \"",
-      "cooldown_until_utc": "2026-07-17T23:17:24.404239+00:00"
+      "last_error": "{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-3.5-flash\\nPlease retry in 42.604637312s.\",\n    \"status\": \"RESOURCE_EXHAUSTED\",\n    \"",
+      "cooldown_until_utc": "2026-07-18T01:16:17.415685+00:00"
     },
     "gemini-2.5-flash": {
-      "requests_today": 18,
-      "success_today": 15,
+      "requests_today": 20,
+      "success_today": 17,
       "errors_today": 3,
-      "last_used_utc": "2026-07-17T23:02:35.271334+00:00",
+      "last_used_utc": "2026-07-18T01:01:27.732820+00:00",
       "last_status": "ok",
       "last_mode": "fallback",
       "last_response_status": 200,
