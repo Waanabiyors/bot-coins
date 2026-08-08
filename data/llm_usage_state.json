@@ -1,37 +1,26 @@
 {
-  "quota_date_pacific": "2026-08-07",
-  "grounded_runs_today": 4,
+  "quota_date_pacific": "2026-08-08",
+  "grounded_runs_today": 1,
   "last_grounding_bucket_utc": "2026-08-08T04:00Z",
   "models": {
     "gemini-3.5-flash": {
-      "requests_today": 45,
-      "success_today": 27,
-      "errors_today": 18,
-      "last_used_utc": "2026-08-08T05:01:08.797977+00:00",
-      "last_status": "http_error",
-      "last_mode": "deep_primary",
-      "last_response_status": 429,
-      "last_error": "{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-3.5-flash\\nPlease retry in 51.2235937s.\",\n    \"status\": \"RESOURCE_EXHAUSTED\",\n    \"de",
-      "cooldown_until_utc": "2026-08-08T05:16:08.797988+00:00"
-    },
-    "gemini-2.5-flash": {
-      "requests_today": 24,
-      "success_today": 18,
-      "errors_today": 6,
-      "last_used_utc": "2026-08-08T05:01:36.303325+00:00",
+      "requests_today": 3,
+      "success_today": 3,
+      "errors_today": 0,
+      "last_used_utc": "2026-08-08T07:01:13.627177+00:00",
       "last_status": "ok",
-      "last_mode": "grounding",
+      "last_mode": "deep_primary",
       "last_response_status": 200,
-      "last_error": "{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\\nPlease retry in 37.977157245s.\",\n    \"status\": \"RESOURCE_EXHAUSTED\",\n    \"",
+      "last_error": "",
       "cooldown_until_utc": ""
     },
-    "gemini-2.5-flash-lite": {
-      "requests_today": 1,
-      "success_today": 1,
+    "gemini-2.5-flash": {
+      "requests_today": 2,
+      "success_today": 2,
       "errors_today": 0,
-      "last_used_utc": "2026-08-08T05:01:24.109122+00:00",
+      "last_used_utc": "2026-08-08T07:01:37.905044+00:00",
       "last_status": "ok",
-      "last_mode": "grounding_researcher",
+      "last_mode": "grounding",
       "last_response_status": 200,
       "last_error": "",
       "cooldown_until_utc": ""
