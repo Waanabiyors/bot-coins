@@ -1,29 +1,29 @@
 {
-  "quota_date_pacific": "2026-08-15",
-  "grounded_runs_today": 6,
-  "last_grounding_bucket_utc": "2026-08-15T16:00Z",
+  "quota_date_pacific": "2026-08-16",
+  "grounded_runs_today": 1,
+  "last_grounding_bucket_utc": "2026-08-16T04:00Z",
   "models": {
     "gemini-3.5-flash": {
-      "requests_today": 42,
-      "success_today": 27,
-      "errors_today": 15,
-      "last_used_utc": "2026-08-16T05:01:33.373122+00:00",
-      "last_status": "http_error",
+      "requests_today": 3,
+      "success_today": 3,
+      "errors_today": 0,
+      "last_used_utc": "2026-08-16T07:01:15.551643+00:00",
+      "last_status": "ok",
       "last_mode": "deep_primary",
-      "last_response_status": 429,
-      "last_error": "{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-3.5-flash\\nPlease retry in 26.650542181s.\",\n    \"status\": \"RESOURCE_EXHAUSTED\",\n    \"",
-      "cooldown_until_utc": "2026-08-16T05:16:33.373136+00:00"
+      "last_response_status": 200,
+      "last_error": "",
+      "cooldown_until_utc": ""
     },
     "gemini-2.5-flash": {
-      "requests_today": 27,
-      "success_today": 22,
-      "errors_today": 5,
-      "last_used_utc": "2026-08-16T05:01:33.535701+00:00",
-      "last_status": "http_error",
-      "last_mode": "fallback",
-      "last_response_status": 429,
-      "last_error": "{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\\nPlease retry in 26.488032767s.\",\n    \"status\": \"RESOURCE_EXHAUSTED\",\n    \"",
-      "cooldown_until_utc": "2026-08-16T05:16:33.535713+00:00"
+      "requests_today": 2,
+      "success_today": 2,
+      "errors_today": 0,
+      "last_used_utc": "2026-08-16T07:01:46.186993+00:00",
+      "last_status": "ok",
+      "last_mode": "grounding",
+      "last_response_status": 200,
+      "last_error": "",
+      "cooldown_until_utc": ""
     }
   }
 }
