@@ -1,28 +1,39 @@
 {
   "quota_date_pacific": "2026-08-25",
-  "grounded_runs_today": 3,
-  "last_grounding_bucket_utc": "2026-08-25T08:00Z",
+  "grounded_runs_today": 5,
+  "last_grounding_bucket_utc": "2026-08-25T12:00Z",
   "models": {
     "gemini-3.5-flash": {
-      "requests_today": 6,
-      "success_today": 3,
+      "requests_today": 8,
+      "success_today": 5,
       "errors_today": 3,
-      "last_used_utc": "2026-08-25T11:02:31.290895+00:00",
-      "last_status": "http_error",
+      "last_used_utc": "2026-08-25T13:02:03.094415+00:00",
+      "last_status": "ok",
       "last_mode": "deep_primary",
-      "last_response_status": 503,
+      "last_response_status": 200,
       "last_error": "{\n  \"error\": {\n    \"code\": 503,\n    \"message\": \"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\n    \"status\": \"UNAVAILABLE\"\n  }\n}\n",
-      "cooldown_until_utc": "2026-08-25T11:17:31.290907+00:00"
+      "cooldown_until_utc": ""
     },
     "gemini-2.5-flash": {
-      "requests_today": 7,
-      "success_today": 5,
-      "errors_today": 2,
-      "last_used_utc": "2026-08-25T11:02:42.279541+00:00",
+      "requests_today": 9,
+      "success_today": 6,
+      "errors_today": 3,
+      "last_used_utc": "2026-08-25T13:01:51.021258+00:00",
       "last_status": "ok",
-      "last_mode": "fallback",
+      "last_mode": "grounding",
       "last_response_status": 200,
-      "last_error": "HTTPSConnectionPool(host='generativelanguage.googleapis.com', port=443): Read timed out. (read timeout=45)",
+      "last_error": "{\n  \"error\": {\n    \"code\": 503,\n    \"message\": \"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\n    \"status\": \"UNAVAILABLE\"\n  }\n}\n",
+      "cooldown_until_utc": ""
+    },
+    "gemini-2.5-flash-lite": {
+      "requests_today": 1,
+      "success_today": 1,
+      "errors_today": 0,
+      "last_used_utc": "2026-08-25T13:01:35.317554+00:00",
+      "last_status": "ok",
+      "last_mode": "grounding_researcher",
+      "last_response_status": 200,
+      "last_error": "",
       "cooldown_until_utc": ""
     }
   }
