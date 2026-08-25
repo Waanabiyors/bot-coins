@@ -1,39 +1,28 @@
 {
-  "quota_date_pacific": "2026-08-24",
-  "grounded_runs_today": 6,
-  "last_grounding_bucket_utc": "2026-08-24T12:00Z",
+  "quota_date_pacific": "2026-08-25",
+  "grounded_runs_today": 1,
+  "last_grounding_bucket_utc": "2026-08-25T04:00Z",
   "models": {
     "gemini-3.5-flash": {
-      "requests_today": 32,
-      "success_today": 26,
-      "errors_today": 6,
-      "last_used_utc": "2026-08-25T05:01:45.213603+00:00",
+      "requests_today": 2,
+      "success_today": 0,
+      "errors_today": 2,
+      "last_used_utc": "2026-08-25T07:02:50.446801+00:00",
       "last_status": "http_error",
       "last_mode": "deep_primary",
       "last_response_status": 503,
       "last_error": "{\n  \"error\": {\n    \"code\": 503,\n    \"message\": \"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\n    \"status\": \"UNAVAILABLE\"\n  }\n}\n",
-      "cooldown_until_utc": "2026-08-25T05:16:45.213615+00:00"
+      "cooldown_until_utc": "2026-08-25T07:17:50.446813+00:00"
     },
     "gemini-2.5-flash": {
-      "requests_today": 18,
-      "success_today": 9,
-      "errors_today": 9,
-      "last_used_utc": "2026-08-25T05:01:53.884828+00:00",
+      "requests_today": 3,
+      "success_today": 2,
+      "errors_today": 1,
+      "last_used_utc": "2026-08-25T07:03:05.485365+00:00",
       "last_status": "ok",
       "last_mode": "fallback",
       "last_response_status": 200,
-      "last_error": "{\n  \"error\": {\n    \"code\": 503,\n    \"message\": \"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\n    \"status\": \"UNAVAILABLE\"\n  }\n}\n",
-      "cooldown_until_utc": ""
-    },
-    "gemini-2.5-flash-lite": {
-      "requests_today": 2,
-      "success_today": 2,
-      "errors_today": 0,
-      "last_used_utc": "2026-08-24T09:01:14.030115+00:00",
-      "last_status": "ok",
-      "last_mode": "grounding_researcher",
-      "last_response_status": 200,
-      "last_error": "",
+      "last_error": "HTTPSConnectionPool(host='generativelanguage.googleapis.com', port=443): Read timed out. (read timeout=45)",
       "cooldown_until_utc": ""
     }
   }
