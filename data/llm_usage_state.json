@@ -4,26 +4,26 @@
   "last_grounding_bucket_utc": "2026-08-26T08:00Z",
   "models": {
     "gemini-3.5-flash": {
-      "requests_today": 24,
-      "success_today": 17,
-      "errors_today": 7,
-      "last_used_utc": "2026-08-26T23:01:18.372131+00:00",
+      "requests_today": 27,
+      "success_today": 19,
+      "errors_today": 8,
+      "last_used_utc": "2026-08-27T01:01:10.634950+00:00",
       "last_status": "http_error",
       "last_mode": "deep_primary",
       "last_response_status": 429,
-      "last_error": "{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-3.5-flash\\nPlease retry in 41.645451374s.\",\n    \"status\": \"RESOURCE_EXHAUSTED\",\n    \"",
-      "cooldown_until_utc": "2026-08-26T23:16:18.372142+00:00"
+      "last_error": "{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-3.5-flash\\nPlease retry in 49.375362253s.\",\n    \"status\": \"RESOURCE_EXHAUSTED\",\n    \"",
+      "cooldown_until_utc": "2026-08-27T01:16:10.634961+00:00"
     },
     "gemini-2.5-flash": {
-      "requests_today": 13,
+      "requests_today": 14,
       "success_today": 6,
-      "errors_today": 7,
-      "last_used_utc": "2026-08-26T23:01:28.729804+00:00",
-      "last_status": "ok",
+      "errors_today": 8,
+      "last_used_utc": "2026-08-27T01:01:12.090276+00:00",
+      "last_status": "http_error",
       "last_mode": "fallback",
-      "last_response_status": 200,
+      "last_response_status": 503,
       "last_error": "{\n  \"error\": {\n    \"code\": 503,\n    \"message\": \"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\n    \"status\": \"UNAVAILABLE\"\n  }\n}\n",
-      "cooldown_until_utc": ""
+      "cooldown_until_utc": "2026-08-27T01:16:12.090286+00:00"
     },
     "gemini-2.5-flash-lite": {
       "requests_today": 3,
