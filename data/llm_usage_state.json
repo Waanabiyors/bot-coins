@@ -1,15 +1,26 @@
 {
   "quota_date_pacific": "2026-09-03",
-  "grounded_runs_today": 0,
-  "last_grounding_bucket_utc": "",
+  "grounded_runs_today": 1,
+  "last_grounding_bucket_utc": "2026-09-03T12:00Z",
   "models": {
     "gemini-3.5-flash": {
-      "requests_today": 9,
-      "success_today": 9,
+      "requests_today": 11,
+      "success_today": 11,
       "errors_today": 0,
-      "last_used_utc": "2026-09-03T11:01:43.426503+00:00",
+      "last_used_utc": "2026-09-03T13:01:48.763787+00:00",
       "last_status": "ok",
       "last_mode": "deep_primary",
+      "last_response_status": 200,
+      "last_error": "",
+      "cooldown_until_utc": ""
+    },
+    "gemini-2.5-flash": {
+      "requests_today": 2,
+      "success_today": 2,
+      "errors_today": 0,
+      "last_used_utc": "2026-09-03T13:01:32.771758+00:00",
+      "last_status": "ok",
+      "last_mode": "grounding",
       "last_response_status": 200,
       "last_error": "",
       "cooldown_until_utc": ""
