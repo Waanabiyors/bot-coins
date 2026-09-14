@@ -1,28 +1,39 @@
 {
   "quota_date_pacific": "2026-09-14",
-  "grounded_runs_today": 1,
-  "last_grounding_bucket_utc": "2026-09-14T08:00Z",
+  "grounded_runs_today": 4,
+  "last_grounding_bucket_utc": "2026-09-14T12:00Z",
   "models": {
     "gemini-3.5-flash": {
-      "requests_today": 7,
+      "requests_today": 8,
       "success_today": 5,
-      "errors_today": 2,
-      "last_used_utc": "2026-09-14T13:01:01.783087+00:00",
-      "last_status": "ok",
+      "errors_today": 3,
+      "last_used_utc": "2026-09-14T15:00:58.351195+00:00",
+      "last_status": "http_error",
       "last_mode": "deep_primary",
-      "last_response_status": 200,
+      "last_response_status": 503,
       "last_error": "{\n  \"error\": {\n    \"code\": 503,\n    \"message\": \"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\n    \"status\": \"UNAVAILABLE\"\n  }\n}\n",
-      "cooldown_until_utc": ""
+      "cooldown_until_utc": "2026-09-14T15:15:58.351207+00:00"
     },
     "gemini-2.5-flash": {
-      "requests_today": 11,
-      "success_today": 5,
-      "errors_today": 6,
-      "last_used_utc": "2026-09-14T13:03:03.079405+00:00",
-      "last_status": "ok",
+      "requests_today": 18,
+      "success_today": 6,
+      "errors_today": 12,
+      "last_used_utc": "2026-09-14T15:01:40.850584+00:00",
+      "last_status": "http_error",
       "last_mode": "fallback",
-      "last_response_status": 200,
+      "last_response_status": 503,
       "last_error": "{\n  \"error\": {\n    \"code\": 503,\n    \"message\": \"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\n    \"status\": \"UNAVAILABLE\"\n  }\n}\n",
+      "cooldown_until_utc": "2026-09-14T15:16:40.850594+00:00"
+    },
+    "gemini-2.5-flash-lite": {
+      "requests_today": 1,
+      "success_today": 1,
+      "errors_today": 0,
+      "last_used_utc": "2026-09-14T15:01:12.523478+00:00",
+      "last_status": "ok",
+      "last_mode": "grounding_researcher",
+      "last_response_status": 200,
+      "last_error": "",
       "cooldown_until_utc": ""
     }
   }
