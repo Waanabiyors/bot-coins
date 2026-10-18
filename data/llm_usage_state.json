@@ -4,26 +4,26 @@
   "last_grounding_bucket_utc": "2026-10-17T20:00Z",
   "models": {
     "gemini-3.5-flash": {
-      "requests_today": 23,
-      "success_today": 6,
-      "errors_today": 17,
-      "last_used_utc": "2026-10-17T23:01:05.590576+00:00",
-      "last_status": "http_error",
+      "requests_today": 27,
+      "success_today": 7,
+      "errors_today": 20,
+      "last_used_utc": "2026-10-18T01:02:02.200553+00:00",
+      "last_status": "exception",
       "last_mode": "deep_primary",
       "last_response_status": 429,
-      "last_error": "{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-3.6-flash\\nPlease retry in 58m54.424730451s.\",\n    \"status\": \"RESOURCE_EXHAUSTED\",\n  ",
-      "cooldown_until_utc": "2026-10-17T23:16:05.590590+00:00"
+      "last_error": "HTTPSConnectionPool(host='generativelanguage.googleapis.com', port=443): Read timed out. (read timeout=45)",
+      "cooldown_until_utc": "2026-10-18T01:16:17.139785+00:00"
     },
     "gemini-2.5-flash": {
-      "requests_today": 25,
-      "success_today": 12,
+      "requests_today": 26,
+      "success_today": 13,
       "errors_today": 13,
-      "last_used_utc": "2026-10-17T23:01:15.897540+00:00",
-      "last_status": "http_error",
+      "last_used_utc": "2026-10-18T01:01:14.154927+00:00",
+      "last_status": "ok",
       "last_mode": "fallback",
-      "last_response_status": 503,
+      "last_response_status": 200,
       "last_error": "{\n  \"error\": {\n    \"code\": 503,\n    \"message\": \"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\n    \"status\": \"UNAVAILABLE\"\n  }\n}\n",
-      "cooldown_until_utc": "2026-10-17T23:16:15.897552+00:00"
+      "cooldown_until_utc": ""
     },
     "gemini-2.5-flash-lite": {
       "requests_today": 2,
