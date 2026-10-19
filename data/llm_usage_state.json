@@ -1,39 +1,17 @@
 {
-  "quota_date_pacific": "2026-10-18",
-  "grounded_runs_today": 6,
-  "last_grounding_bucket_utc": "2026-10-18T16:00Z",
+  "quota_date_pacific": "2026-10-19",
+  "grounded_runs_today": 0,
+  "last_grounding_bucket_utc": "",
   "models": {
     "gemini-3.5-flash": {
-      "requests_today": 32,
-      "success_today": 14,
-      "errors_today": 18,
-      "last_used_utc": "2026-10-19T05:01:12.015038+00:00",
-      "last_status": "http_error",
+      "requests_today": 4,
+      "success_today": 2,
+      "errors_today": 2,
+      "last_used_utc": "2026-10-19T07:02:05.296255+00:00",
+      "last_status": "ok",
       "last_mode": "deep_primary",
-      "last_response_status": 429,
-      "last_error": "{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-3.6-flash\\nPlease retry in 18h58m47.989367153s.\",\n    \"status\": \"RESOURCE_EXHAUSTED\",",
-      "cooldown_until_utc": "2026-10-19T05:16:12.015052+00:00"
-    },
-    "gemini-2.5-flash": {
-      "requests_today": 28,
-      "success_today": 13,
-      "errors_today": 15,
-      "last_used_utc": "2026-10-19T05:01:22.270723+00:00",
-      "last_status": "ok",
-      "last_mode": "fallback",
       "last_response_status": 200,
-      "last_error": "{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\\nPlease retry in 22h58m41.607800907s.\",\n    \"status\": \"RESOURCE_EXHAUSTED\",",
-      "cooldown_until_utc": ""
-    },
-    "gemini-2.5-flash-lite": {
-      "requests_today": 1,
-      "success_today": 1,
-      "errors_today": 0,
-      "last_used_utc": "2026-10-18T13:01:06.142935+00:00",
-      "last_status": "ok",
-      "last_mode": "grounding_researcher",
-      "last_response_status": 200,
-      "last_error": "",
+      "last_error": "HTTPSConnectionPool(host='generativelanguage.googleapis.com', port=443): Read timed out. (read timeout=45)",
       "cooldown_until_utc": ""
     }
   }
