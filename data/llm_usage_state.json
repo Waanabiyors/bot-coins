@@ -1,29 +1,40 @@
 {
   "quota_date_pacific": "2026-10-28",
-  "grounded_runs_today": 0,
-  "last_grounding_bucket_utc": "",
+  "grounded_runs_today": 2,
+  "last_grounding_bucket_utc": "2026-10-28T12:00Z",
   "models": {
     "gemini-3.5-flash": {
-      "requests_today": 12,
+      "requests_today": 14,
       "success_today": 9,
-      "errors_today": 3,
-      "last_used_utc": "2026-10-28T13:01:45.489438+00:00",
+      "errors_today": 5,
+      "last_used_utc": "2026-10-28T15:01:14.583716+00:00",
       "last_status": "http_error",
       "last_mode": "deep_primary",
       "last_response_status": 503,
       "last_error": "{\n  \"error\": {\n    \"code\": 503,\n    \"message\": \"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\n    \"status\": \"UNAVAILABLE\"\n  }\n}\n",
-      "cooldown_until_utc": "2026-10-28T13:16:45.489449+00:00"
+      "cooldown_until_utc": "2026-10-28T15:16:14.583726+00:00"
     },
     "gemini-2.5-flash": {
-      "requests_today": 3,
+      "requests_today": 8,
       "success_today": 0,
-      "errors_today": 3,
-      "last_used_utc": "2026-10-28T13:02:10.288398+00:00",
+      "errors_today": 8,
+      "last_used_utc": "2026-10-28T15:01:15.372134+00:00",
       "last_status": "http_error",
       "last_mode": "fallback",
       "last_response_status": 503,
       "last_error": "{\n  \"error\": {\n    \"code\": 503,\n    \"message\": \"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\n    \"status\": \"UNAVAILABLE\"\n  }\n}\n",
-      "cooldown_until_utc": "2026-10-28T13:17:10.288411+00:00"
+      "cooldown_until_utc": "2026-10-28T15:16:15.372146+00:00"
+    },
+    "gemini-2.5-flash-lite": {
+      "requests_today": 1,
+      "success_today": 1,
+      "errors_today": 0,
+      "last_used_utc": "2026-10-28T15:01:08.105311+00:00",
+      "last_status": "ok",
+      "last_mode": "grounding_researcher",
+      "last_response_status": 200,
+      "last_error": "",
+      "cooldown_until_utc": ""
     }
   }
 }
