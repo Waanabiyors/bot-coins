@@ -4,23 +4,23 @@
   "last_grounding_bucket_utc": "2026-11-08T20:00Z",
   "models": {
     "gemini-3.5-flash": {
-      "requests_today": 21,
-      "success_today": 17,
-      "errors_today": 4,
-      "last_used_utc": "2026-11-08T23:01:26.016102+00:00",
-      "last_status": "ok",
+      "requests_today": 24,
+      "success_today": 18,
+      "errors_today": 6,
+      "last_used_utc": "2026-11-09T01:01:10.347911+00:00",
+      "last_status": "http_error",
       "last_mode": "deep_primary",
-      "last_response_status": 200,
-      "last_error": "{\n  \"error\": {\n    \"code\": 503,\n    \"message\": \"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\n    \"status\": \"UNAVAILABLE\"\n  }\n}\n",
-      "cooldown_until_utc": ""
+      "last_response_status": 429,
+      "last_error": "{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://aistudio.google.com/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-3.6-flash, description: Generate content requests per day limit exceeded on Free Tier. See",
+      "cooldown_until_utc": "2026-11-09T01:16:10.347923+00:00"
     },
     "gemini-2.5-flash": {
-      "requests_today": 11,
-      "success_today": 8,
-      "errors_today": 3,
-      "last_used_utc": "2026-11-08T21:02:09.762407+00:00",
+      "requests_today": 13,
+      "success_today": 9,
+      "errors_today": 4,
+      "last_used_utc": "2026-11-09T01:01:22.282641+00:00",
       "last_status": "ok",
-      "last_mode": "grounding",
+      "last_mode": "fallback",
       "last_response_status": 200,
       "last_error": "{\n  \"error\": {\n    \"code\": 503,\n    \"message\": \"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\n    \"status\": \"UNAVAILABLE\"\n  }\n}\n",
       "cooldown_until_utc": ""
