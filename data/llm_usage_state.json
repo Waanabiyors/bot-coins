@@ -4,26 +4,26 @@
   "last_grounding_bucket_utc": "2026-11-18T20:00Z",
   "models": {
     "gemini-3.5-flash": {
-      "requests_today": 39,
+      "requests_today": 43,
       "success_today": 7,
-      "errors_today": 32,
-      "last_used_utc": "2026-11-19T03:01:18.222391+00:00",
+      "errors_today": 36,
+      "last_used_utc": "2026-11-19T05:01:09.895921+00:00",
       "last_status": "http_error",
       "last_mode": "deep_primary",
       "last_response_status": 429,
       "last_error": "{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://aistudio.google.com/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-3.6-flash, description: Generate content requests per day limit exceeded on Free Tier. See",
-      "cooldown_until_utc": "2026-11-19T03:16:18.222402+00:00"
+      "cooldown_until_utc": "2026-11-19T05:16:09.895931+00:00"
     },
     "gemini-2.5-flash": {
-      "requests_today": 31,
+      "requests_today": 35,
       "success_today": 13,
-      "errors_today": 18,
-      "last_used_utc": "2026-11-19T03:01:18.378303+00:00",
+      "errors_today": 22,
+      "last_used_utc": "2026-11-19T05:01:10.040205+00:00",
       "last_status": "http_error",
       "last_mode": "fallback",
       "last_response_status": 429,
       "last_error": "{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://aistudio.google.com/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash, description: Generate content requests per day limit exceeded on Free Tier. See",
-      "cooldown_until_utc": "2026-11-19T03:16:18.378313+00:00"
+      "cooldown_until_utc": "2026-11-19T05:16:10.040215+00:00"
     }
   }
 }
